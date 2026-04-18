@@ -25,6 +25,7 @@ ui/dist/
 # Claude/OMC local artifacts
 .claude/
 .omc/
+.worktrees/
 
 # OS/editor
 .DS_Store
