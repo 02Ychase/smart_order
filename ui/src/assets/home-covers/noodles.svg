@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fff3da"/>
+      <stop offset="100%" stop-color="#e2bf87"/>
+    </linearGradient>
+  </defs>
+  <rect width="320" height="180" rx="24" fill="url(#bg)"/>
+  <ellipse cx="106" cy="94" rx="54" ry="38" fill="#ffffff" opacity="0.9"/>
+  <path d="M70 96c18-16 54-16 72 0" fill="none" stroke="#d39a45" stroke-width="8" stroke-linecap="round"/>
+  <path d="M182 68h74" stroke="#9a6b2d" stroke-width="12" stroke-linecap="round"/>
+  <path d="M182 94h92" stroke="#9a6b2d" stroke-width="12" stroke-linecap="round"/>
+  <path d="M182 120h66" stroke="#9a6b2d" stroke-width="12" stroke-linecap="round"/>
+  <text x="28" y="154" fill="#6f4f24" font-size="28" font-family="Arial, sans-serif">粥面</text>
+</svg>

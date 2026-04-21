@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 180">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffe3e3"/>
+      <stop offset="100%" stop-color="#ff8d8d"/>
+    </linearGradient>
+  </defs>
+  <rect width="320" height="180" rx="24" fill="url(#bg)"/>
+  <circle cx="112" cy="96" r="42" fill="#fff5f0"/>
+  <circle cx="94" cy="88" r="10" fill="#ffb347"/>
+  <circle cx="126" cy="76" r="12" fill="#91d36b"/>
+  <circle cx="136" cy="106" r="11" fill="#ff6b6b"/>
+  <path d="M180 62c28 10 50 30 68 60" fill="none" stroke="#8b1e1e" stroke-width="12" stroke-linecap="round"/>
+  <text x="28" y="154" fill="#7a1919" font-size="28" font-family="Arial, sans-serif">麻辣烫</text>
+</svg>

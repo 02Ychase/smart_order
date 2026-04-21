@@ -7,6 +7,7 @@
 
 
 import logging
+from pathlib import Path
 
 logging.basicConfig(
     filename="D:\projects\smart_order\log\\run.log",
@@ -16,6 +17,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 import uvicorn
+
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 def main():
     """启动AiMenu API服务"""
@@ -35,8 +38,9 @@ def main():
             "api.main:app",
             host="127.0.0.1",
             port=8000,
-            reload=True,  # 开发模式，文件变化时自动重启
-            log_level="info"
+            reload=True,
+            reload_dirs=[str(PROJECT_ROOT)],
+            log_level="info",
         )
         logger.info("🚀 启动Uvicorn服务器成功!")
     except KeyboardInterrupt:

@@ -9,23 +9,425 @@ DISTRICT_POINTS = {
     "长宁": {"address": "长宁路 1018 号", "longitude": 121.4246, "latitude": 31.2202},
 }
 
+CATEGORY_BUSINESS_HOURS = {
+    "湘菜": ["10:00-21:30", "09:30-21:00", "10:30-22:00"],
+    "轻食": ["08:30-20:00", "09:00-20:30", "10:00-20:00"],
+    "咖啡甜品": ["09:00-21:00", "10:00-21:30", "11:00-22:00"],
+    "炸鸡汉堡": ["10:30-22:30", "11:00-23:00", "10:00-22:00"],
+    "粥面": ["06:30-13:30,17:00-22:30", "07:00-14:00,17:30-23:00", "06:30-21:30"],
+    "日韩料理": ["10:30-21:30", "11:00-22:00", "10:00-21:00"],
+    "麻辣烫": ["10:30-23:00", "11:00-23:30", "10:00-22:30"],
+    "披萨意面": ["10:30-21:30", "11:00-22:00", "10:00-21:00"],
+}
 
-def dish(name: str, description: str, price: float, tags: str, is_recommended: bool = False) -> dict:
+CATEGORY_TAGS = {
+    "湘菜": ["现炒", "下饭菜", "工作餐"],
+    "轻食": ["轻负担", "高蛋白", "午餐优选"],
+    "咖啡甜品": ["下午茶", "手作甜点", "咖啡搭子"],
+    "炸鸡汉堡": ["现炸", "能量快餐", "夜宵友好"],
+    "粥面": ["暖胃", "早餐", "夜宵"],
+    "日韩料理": ["定食", "便当感", "清爽口味"],
+    "麻辣烫": ["锅底可选", "重口爱好", "晚餐热门"],
+    "披萨意面": ["多人分享", "芝士控", "西式简餐"],
+}
+
+DISTRICT_LANDMARKS = {
+    "静安": "地铁站商务楼下",
+    "徐汇": "写字楼连廊口",
+    "浦东": "商场沿街外摆位",
+    "杨浦": "大学路街角",
+    "长宁": "社区商业入口",
+}
+
+BUILDING_SUFFIXES = ["中心广场", "邻里汇", "时光里", "星坊", "悦荟", "国际商厦"]
+
+SPECIFIC_INGREDIENTS = {
+    "辣椒炒肉": ["猪前腿肉", "青椒", "红椒", "蒜片"],
+    "攸县香干炒肉": ["攸县香干", "猪肉片", "青椒", "蒜苗"],
+    "外婆菜炒鸡蛋": ["外婆菜", "鸡蛋", "蒜末", "小米椒"],
+    "小炒黄牛肉": ["黄牛肉", "芹菜", "小米椒", "蒜末"],
+    "皮蛋瘦肉粥": ["大米", "皮蛋", "猪瘦肉", "姜丝"],
+    "鲜虾云吞面": ["鲜虾", "猪肉馅", "云吞皮", "细面"],
+    "照烧鸡排饭": ["鸡腿排", "照烧汁", "洋葱", "米饭"],
+    "宫保鸡丁": ["鸡胸肉", "花生米", "青椒", "红椒", "葱段"],
+    "玛格丽特披萨": ["披萨饼底", "番茄酱", "马苏里拉芝士", "罗勒"],
+    "奶油培根意面": ["意面", "培根", "淡奶油", "黑胡椒"],
+}
+
+HANDWRITTEN_DISH_DESCRIPTIONS = {
+    "辣椒炒肉": "现切猪前腿肉搭配青红椒大火快炒，锅气足、咸香辣劲明显，是工作日最稳的下饭菜。",
+    "小炒黄牛肉": "黄牛肉片现炒到刚刚断生，芹菜和小米椒提香提辣，口感嫩爽，越吃越开胃。",
+    "鲜虾云吞面": "鲜虾云吞现煮后配细面和热汤，入口鲜甜不腻，适合想吃热乎主食的时候来一碗。",
+    "香煎鸡胸藜麦碗": "香煎鸡胸切片铺在藜麦和时蔬上，调味清爽不厚重，饱腹感在线，做午餐很合适。",
+    "燕麦拿铁": "浓缩咖啡融合燕麦奶，入口顺滑带坚果香，苦感柔和，适合上午提神或下午慢慢喝。",
+    "巴斯克芝士蛋糕": "表层带一点焦香，内里绵密湿润，芝士味浓但不腻，配一杯热美式会更舒服。",
+}
+
+
+
+def _stable_number(value: str) -> int:
+    return sum(ord(char) for char in value)
+
+
+
+def _unique(values: list[str]) -> list[str]:
+    ordered: list[str] = []
+    for value in values:
+        if value and value not in ordered:
+            ordered.append(value)
+    return ordered
+
+
+
+def _infer_cuisine_type(name: str, tags: str) -> str:
+    text = f"{name},{tags}"
+    rules = [
+        ("湘", "湘菜"),
+        ("剁椒", "湘菜"),
+        ("外婆菜", "湘菜"),
+        ("香干", "湘菜"),
+        ("寿司", "日料"),
+        ("鳗鱼", "日料"),
+        ("丼", "日料"),
+        ("味噌", "日料"),
+        ("咖喱", "日式洋食"),
+        ("麻辣烫", "麻辣烫"),
+        ("冒菜", "川味麻辣"),
+        ("披萨", "意式"),
+        ("意面", "意式"),
+        ("焗饭", "意式"),
+        ("焗面", "意式"),
+        ("汉堡", "美式快餐"),
+        ("炸鸡", "美式快餐"),
+        ("鸡翅", "美式快餐"),
+        ("贝果", "轻食"),
+        ("藜麦", "轻食"),
+        ("沙拉", "轻食"),
+        ("卷", "轻食"),
+        ("能量碗", "轻食"),
+        ("拿铁", "咖啡"),
+        ("美式", "咖啡"),
+        ("冷萃", "咖啡"),
+        ("手冲", "咖啡"),
+        ("可颂", "烘焙"),
+        ("曲奇", "甜点"),
+        ("蛋糕", "甜点"),
+        ("布丁", "甜点"),
+        ("挞", "甜点"),
+        ("粥", "粥品"),
+        ("面", "面食"),
+        ("云吞", "面食"),
+        ("馄饨", "面食"),
+        ("饮品", "饮品"),
+        ("咖啡", "咖啡"),
+        ("甜点", "甜点"),
+    ]
+    for keyword, cuisine_type in rules:
+        if keyword in text:
+            return cuisine_type
+    return "特色餐食"
+
+
+
+def _infer_flavor_profile(name: str, description: str, tags: str) -> str:
+    text = f"{name},{description},{tags}"
+    rules = [
+        ("麻辣", "麻辣浓郁"),
+        ("藤椒", "清麻鲜辣"),
+        ("甜辣", "甜辣回甘"),
+        ("酸甜", "酸甜平衡"),
+        ("香辣", "香辣开胃"),
+        ("鲜辣", "鲜辣下饭"),
+        ("微辣", "咸鲜微辣"),
+        ("辣", "香辣"),
+        ("奶香", "奶香浓郁"),
+        ("芝士", "浓郁奶香"),
+        ("可可", "可可微苦"),
+        ("咖啡", "醇苦回甘"),
+        ("果香", "清新果香"),
+        ("椰香", "椰香顺滑"),
+        ("豆香", "豆香咸鲜"),
+        ("菌香", "菌香浓郁"),
+        ("鲜甜", "鲜甜清爽"),
+        ("咸鲜", "咸鲜适口"),
+        ("清爽", "清爽轻盈"),
+        ("甜", "香甜柔和"),
+    ]
+    for keyword, flavor_profile in rules:
+        if keyword in text:
+            return flavor_profile
+    return "风味均衡"
+
+
+
+def _infer_ingredients(name: str, description: str, tags: str, cuisine_type: str) -> list[str]:
+    if name in SPECIFIC_INGREDIENTS:
+        return list(SPECIFIC_INGREDIENTS[name])
+
+    text = f"{name},{description},{tags},{cuisine_type}"
+    ingredient_rules = [
+        ("牛肉", ["牛肉", "洋葱", "黑胡椒", "酱汁"]),
+        ("猪排", ["猪排", "面包糠", "卷心菜", "酱汁"]),
+        ("鸡排", ["鸡腿排", "黑胡椒", "生菜", "米饭"]),
+        ("鸡腿", ["鸡腿肉", "面包糠", "生菜", "酱料"]),
+        ("鸡胸", ["鸡胸肉", "生菜", "藜麦", "玉米"]),
+        ("鸡", ["鸡肉", "洋葱", "青椒", "酱汁"]),
+        ("虾", ["鲜虾", "蔬菜", "调味汁", "香料"]),
+        ("三文鱼", ["三文鱼", "米饭", "海苔", "黄瓜"]),
+        ("鳗鱼", ["鳗鱼", "米饭", "照烧汁", "海苔"]),
+        ("鱼", ["鱼肉", "辣椒", "姜丝", "葱段"]),
+        ("豆腐", ["豆腐", "葱花", "酱汁", "香料"]),
+        ("香干", ["香干", "青椒", "猪肉", "蒜苗"]),
+        ("蛋", ["鸡蛋", "葱花", "调味汁", "食用油"]),
+        ("粥", ["大米", "高汤", "姜丝", "葱花"]),
+        ("云吞", ["云吞皮", "猪肉馅", "高汤", "青菜"]),
+        ("面", ["面条", "高汤", "青菜", "葱花"]),
+        ("寿司", ["寿司米", "海苔", "黄瓜", "鱼肉"]),
+        ("沙拉", ["生菜", "番茄", "黄瓜", "油醋汁"]),
+        ("藜麦", ["藜麦", "生菜", "南瓜", "鸡胸肉"]),
+        ("卷", ["饼皮", "蔬菜", "蛋白食材", "酱汁"]),
+        ("贝果", ["贝果", "鸡蛋", "生菜", "奶酪"]),
+        ("拿铁", ["咖啡豆", "牛奶", "燕麦奶"]),
+        ("美式", ["咖啡豆", "饮用水"]),
+        ("冷萃", ["冷萃咖啡液", "饮用水", "柑橘片"]),
+        ("蛋糕", ["奶油奶酪", "鸡蛋", "低筋面粉", "黄油"]),
+        ("曲奇", ["黄油", "低筋面粉", "巧克力", "鸡蛋"]),
+        ("可颂", ["高筋面粉", "黄油", "酵母", "牛奶"]),
+        ("披萨", ["披萨饼底", "芝士", "番茄酱", "配料"]),
+        ("意面", ["意面", "橄榄油", "番茄或奶油酱", "香草"]),
+        ("焗饭", ["米饭", "芝士", "酱汁", "主菜配料"]),
+        ("焗面", ["意面", "芝士", "番茄酱", "肉丸"]),
+        ("汉堡", ["汉堡胚", "肉饼", "生菜", "芝士"]),
+        ("薯", ["土豆", "海盐", "黑胡椒"]),
+        ("炸", ["主料", "面糊", "面包糠", "调味粉"]),
+        ("麻辣烫", ["汤底", "蔬菜", "丸类", "豆制品"]),
+        ("冒菜", ["辣汤底", "肉类", "蔬菜", "豆制品"]),
+        ("豆浆", ["黄豆", "饮用水"]),
+        ("酸奶", ["酸奶", "水果", "坚果"]),
+        ("果昔", ["水果", "酸奶", "冰块"]),
+        ("气泡", ["苏打水", "果汁", "糖浆"]),
+        ("冰粉", ["冰粉粉", "红糖浆", "山楂碎", "葡萄干"]),
+        ("米饭", ["大米"]),
+    ]
+    for keyword, ingredients in ingredient_rules:
+        if keyword in text:
+            return ingredients
+
+    if cuisine_type in {"咖啡", "饮品"}:
+        return ["饮用水", "风味原料"]
+    if cuisine_type in {"甜点", "烘焙"}:
+        return ["面粉", "黄油", "鸡蛋", "糖"]
+    return ["主料", "蔬菜", "调味料"]
+
+
+
+def _infer_allergens(ingredients: list[str], name: str, tags: str, cuisine_type: str) -> list[str]:
+    text = ",".join(ingredients) + f",{name},{tags},{cuisine_type}"
+    allergens: list[str] = []
+    rules = [
+        (["花生"], "花生"),
+        (["牛奶", "芝士", "黄油", "奶油", "酸奶", "奶酪"], "牛奶"),
+        (["鸡蛋", "蛋"], "鸡蛋"),
+        (["黄豆", "豆腐", "豆皮", "香干", "豆浆", "豆制品"], "大豆"),
+        (["虾", "虾滑", "甲壳"], "甲壳类"),
+        (["鳗鱼", "三文鱼", "鱼肉", "海鲜", "鳕鱼"], "鱼类"),
+        (["面", "面粉", "披萨", "意面", "贝果", "可颂", "曲奇", "汉堡胚", "面包糠", "吐司", "饼皮", "云吞皮"], "麸质"),
+        (["坚果", "榛子"], "坚果"),
+    ]
+    for keywords, allergen in rules:
+        if any(keyword in text for keyword in keywords):
+            allergens.append(allergen)
+    return _unique(allergens)
+
+
+
+def _infer_cooking_method(name: str, description: str, tags: str) -> str:
+    text = f"{name},{description},{tags}"
+    rules = [
+        (["焗"], "焗烤"),
+        (["披萨", "可颂", "曲奇", "挞", "蛋糕", "肉桂卷", "面包"], "烘烤"),
+        (["炸", "鸡翅", "鸡柳", "热狗", "薯", "猪排", "唐扬", "可乐饼", "洋葱圈", "鸡米花"], "油炸"),
+        (["拿铁", "美式", "冷萃", "手冲"], "萃取"),
+        (["沙拉", "寿司", "果昔", "气泡饮", "奶茶"], "冷制"),
+        (["粥", "汤", "云吞", "馄饨", "麻辣烫", "冒菜", "锅底"], "炖煮"),
+        (["炒", "锅", "丼"], "爆炒"),
+        (["照烧", "香煎", "玉子烧", "鸡排"], "煎制"),
+    ]
+    for keywords, method in rules:
+        if any(keyword in text for keyword in keywords):
+            return method
+    return "现制"
+
+
+
+def _ensure_specific_description(
+    name: str,
+    description: str,
+    ingredients: list[str],
+    flavor_profile: str,
+    cooking_method: str,
+) -> str:
+    handwritten_description = HANDWRITTEN_DISH_DESCRIPTIONS.get(name)
+    if handwritten_description:
+        return handwritten_description
+
+    base = description.strip()
+    if len(base) >= 20 and not ("以" in base and "呈现" in base):
+        return base
+
+    ingredient_text = "、".join(ingredients[:2])
+    templates = {
+        "爆炒": f"{base}，{ingredient_text}现炒出锅，整体{flavor_profile}，配米饭点单会更过瘾。",
+        "炖煮": f"{base}，{ingredient_text}慢火{cooking_method}入味，口感{flavor_profile}，当作正餐很稳妥。",
+        "油炸": f"{base}，{ingredient_text}炸到外酥里嫩，趁热吃更香，做加餐或夜宵都合适。",
+        "冷制": f"{base}，{ingredient_text}现拌现做，整体{flavor_profile}，清爽不腻也更适合工作日午餐。",
+        "烘烤": f"{base}，{ingredient_text}现烤出炉，入口{flavor_profile}，热乎的时候风味更完整。",
+        "焗烤": f"{base}，{ingredient_text}焗到香气更足，整体{flavor_profile}，适合想吃浓郁口味的时候点。",
+        "煎制": f"{base}，{ingredient_text}煎到表面微脆，内部保留汁水，吃起来是{flavor_profile}的路子。",
+        "萃取": f"{base}，选用{ingredient_text}现萃制作，整体{flavor_profile}，适合通勤提神或下午续命。",
+        "现制": f"{base}，{ingredient_text}现点现做，整体{flavor_profile}，吃起来更有一份刚出品的满足感。",
+    }
+    return templates.get(
+        cooking_method,
+        f"{base}，{ingredient_text}{cooking_method}处理后更显层次，整体{flavor_profile}，点来当一餐也很合适。",
+    )
+
+
+
+def dish(name: str, description: str, price: float, tags: str, *args) -> dict:
+    cuisine_type = ""
+    flavor_profile = ""
+    ingredients: list[str] | None = None
+    allergens: list[str] | None = None
+    cooking_method = ""
+    is_recommended = False
+
+    if args:
+        if isinstance(args[0], bool):
+            is_recommended = args[0]
+        else:
+            cuisine_type, flavor_profile, ingredients, allergens, cooking_method = args[:5]
+            if len(args) > 5:
+                is_recommended = bool(args[5])
+
+    resolved_cuisine_type = cuisine_type or _infer_cuisine_type(name, tags)
+    resolved_flavor_profile = flavor_profile or _infer_flavor_profile(name, description, tags)
+    resolved_ingredients = list(ingredients) if ingredients is not None else _infer_ingredients(name, description, tags, resolved_cuisine_type)
+    resolved_allergens = list(allergens) if allergens is not None else _infer_allergens(resolved_ingredients, name, tags, resolved_cuisine_type)
+    resolved_cooking_method = cooking_method or _infer_cooking_method(name, description, tags)
+    resolved_description = _ensure_specific_description(
+        name,
+        description,
+        resolved_ingredients,
+        resolved_flavor_profile,
+        resolved_cooking_method,
+    )
+
     return {
         "name": name,
-        "description": description,
+        "description": resolved_description,
         "price": price,
         "tags": tags,
+        "cuisine_type": resolved_cuisine_type,
+        "flavor_profile": resolved_flavor_profile,
+        "ingredients": resolved_ingredients,
+        "allergens": resolved_allergens,
+        "cooking_method": resolved_cooking_method,
         "is_recommended": is_recommended,
     }
+
 
 
 def section(name: str, dishes: list[dict]) -> dict:
     return {"name": name, "dishes": dishes}
 
 
+
 def clone_categories(categories: list[dict]) -> list[dict]:
     return deepcopy(categories)
+
+
+
+def _build_phone(name: str) -> str:
+    return f"021-{62000000 + _stable_number(name) % 3000000:08d}"
+
+
+
+def _build_business_hours(name: str, homepage_category: str) -> str:
+    options = CATEGORY_BUSINESS_HOURS[homepage_category]
+    return options[_stable_number(name) % len(options)]
+
+
+
+def _build_detailed_address(name: str, district: str) -> str:
+    base_address = DISTRICT_POINTS[district]["address"].replace(" ", "")
+    code = _stable_number(name)
+    building = BUILDING_SUFFIXES[code % len(BUILDING_SUFFIXES)]
+    floor = code % 3 + 1
+    room = 100 + code % 120
+    return f"{base_address}{building}{floor}层{room}室"
+
+
+
+def _build_address_note(name: str, district: str) -> str:
+    entry = code = _stable_number(name) % 4 + 1
+    return f"近{DISTRICT_LANDMARKS[district]}{entry}号取餐点"
+
+
+
+def _build_merchant_tags(homepage_category: str, description: str, promo_text: str, avg_delivery_minutes: int) -> list[str]:
+    tags = list(CATEGORY_TAGS[homepage_category])
+    if "下午茶" in description:
+        tags.append("下午茶")
+    if "夜宵" in description or avg_delivery_minutes >= 35:
+        tags.append("夜宵友好")
+    if "工作日" in description or avg_delivery_minutes <= 28:
+        tags.append("午餐快送")
+    if "双人" in promo_text or "套餐" in promo_text:
+        tags.append("套餐点单")
+    return _unique(tags)[:3]
+
+
+
+def _apply_homepage_category_copy_style(categories: list[dict], homepage_category: str) -> list[dict]:
+    if homepage_category not in {"湘菜", "轻食", "咖啡甜品"}:
+        return categories
+
+    for category in categories:
+        for dish in category["dishes"]:
+            if dish["name"] in HANDWRITTEN_DISH_DESCRIPTIONS:
+                continue
+
+            base = dish["description"].strip()
+            ingredients = "、".join(dish["ingredients"][:2])
+
+            if homepage_category == "湘菜":
+                if any(keyword in base for keyword in ["下饭", "现炒", "锅气"]):
+                    continue
+                if dish["cooking_method"] == "爆炒":
+                    dish["description"] = f"{base}，{ingredients}现炒出锅更有锅气，咸香里带着{dish['flavor_profile']}，拌饭吃特别下饭。"
+                else:
+                    dish["description"] = f"{base}，{ingredients}做得很入味，热乎上桌更显香辣，点来配饭尤其下饭。"
+                continue
+
+            if homepage_category == "轻食":
+                if any(keyword in base for keyword in ["清爽", "轻负担", "低负担"]):
+                    continue
+                if dish["cooking_method"] in {"冷制", "萃取"} or dish["cuisine_type"] in {"咖啡", "饮品"}:
+                    dish["description"] = f"{base}，{ingredients}做得清爽顺口，整体轻负担，搭配卷碗或单点都不会腻。"
+                else:
+                    dish["description"] = f"{base}，{ingredients}搭配得更清爽，吃完有饱腹感但不厚重，工作日点一份也很轻负担。"
+                continue
+
+            if any(keyword in base for keyword in ["口感", "香气", "奶香"]):
+                continue
+            if dish["cooking_method"] == "萃取" or dish["cuisine_type"] in {"咖啡", "饮品"}:
+                dish["description"] = f"{base}，入口先有{dish['flavor_profile']}的层次，随后香气慢慢出来，做下午茶饮品很合适。"
+            else:
+                dish["description"] = f"{base}，整体口感更细腻，入口能吃到明显香气，拿来配咖啡或做下午茶都很合适。"
+
+    return categories
+
 
 
 def build_merchant_seed(
@@ -43,8 +445,14 @@ def build_merchant_seed(
     longitude_offset: float,
     latitude_offset: float,
     categories: list[dict],
+    phone: str = "",
+    business_hours: str = "",
+    detailed_address: str = "",
+    address_note: str = "",
+    merchant_tags: list[str] | None = None,
 ) -> dict:
     district_meta = DISTRICT_POINTS[district]
+    normalized_categories = _apply_homepage_category_copy_style(clone_categories(categories), homepage_category)
     return {
         "name": name,
         "description": description,
@@ -60,7 +468,12 @@ def build_merchant_seed(
         "min_order_amount": min_order_amount,
         "avg_delivery_minutes": avg_delivery_minutes,
         "rating": rating,
-        "categories": clone_categories(categories),
+        "phone": phone or _build_phone(name),
+        "business_hours": business_hours or _build_business_hours(name, homepage_category),
+        "detailed_address": detailed_address or _build_detailed_address(name, district),
+        "address_note": address_note or _build_address_note(name, district),
+        "merchant_tags": list(merchant_tags) if merchant_tags is not None else _build_merchant_tags(homepage_category, description, promo_text, avg_delivery_minutes),
+        "categories": normalized_categories,
     }
 
 
