@@ -59,7 +59,6 @@ const submitRegister = async () => {
       full_name: form.full_name,
       phone: form.phone,
     })
-    await loginWithPassword({ username: form.username, password: form.password })
     emit('auth-success')
   } catch (error) {
     errorMessage.value = error?.message || '注册失败，请稍后再试'

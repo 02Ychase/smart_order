@@ -1,7 +1,12 @@
 <template>
   <div class="homepage-shell">
     <div class="homepage-container">
-      <HomeHeader @open-login="loginOpen = true" @open-cart="cartOpen = true" @open-address="addressOpen = true" />
+      <HomeHeader
+        :current-user="currentUser"
+        @open-login="loginOpen = true"
+        @open-cart="cartOpen = true"
+        @open-address="addressOpen = true"
+      />
       <CategoryFilterBar
         :categories="categories"
         :selected-category="selectedCategory"
@@ -37,6 +42,7 @@ import { onMounted, ref } from 'vue'
 import CategoryFilterBar from './components/home/CategoryFilterBar.vue'
 import FloatingAssistant from './components/home/FloatingAssistant.vue'
 import HomeHeader from './components/home/HomeHeader.vue'
+import { useAuth } from './composables/useAuth'
 import { useHomepage } from './composables/useHomepage'
 import AddressView from './views/AddressView.vue'
 import CheckoutView from './views/CheckoutView.vue'
@@ -48,6 +54,7 @@ const loginOpen = ref(false)
 const cartOpen = ref(false)
 const addressOpen = ref(false)
 const merchantDrawerOpen = ref(false)
+const { currentUser } = useAuth()
 
 const {
   loading,

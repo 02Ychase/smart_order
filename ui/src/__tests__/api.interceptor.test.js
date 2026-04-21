@@ -51,4 +51,34 @@ describe('api interceptor', () => {
     expect(thrownError.data).toEqual(rejection.response.data)
     expect(thrownError.payload).toEqual(rejection.response.data)
   })
+
+  test('formats structured validation detail into a readable message', () => {
+    const rejection = {
+      response: {
+        status: 422,
+        data: {
+          detail: [
+            {
+              type: 'string_too_short',
+              loc: ['body', 'password'],
+              msg: 'String should have at least 8 characters',
+            },
+          ],
+        },
+      },
+    }
+
+    let thrownError
+
+    try {
+      responseErrorHandler(rejection)
+    } catch (error) {
+      thrownError = error
+    }
+
+    expect(thrownError).toBeInstanceOf(Error)
+    expect(thrownError.message).toBe('password: String should have at least 8 characters')
+    expect(thrownError.status).toBe(422)
+    expect(thrownError.data).toEqual(rejection.response.data)
+  })
 })

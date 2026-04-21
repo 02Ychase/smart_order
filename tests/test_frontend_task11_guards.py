@@ -14,7 +14,9 @@ VIEW_FILES = [
 def test_api_error_interceptor_attaches_response_metadata() -> None:
     contents = (ROOT / "ui/src/api/index.js").read_text(encoding="utf-8")
 
-    assert "const requestError = new Error(error.response?.data?.detail || '请求失败，请稍后再试')" in contents
+    assert "const formatErrorDetail = (detail) => {" in contents
+    assert "Array.isArray(detail)" in contents
+    assert "const requestError = new Error(formatErrorDetail(error.response?.data?.detail))" in contents
     assert "requestError.status = error.response?.status" in contents
     assert "requestError.data = error.response?.data" in contents
     assert "requestError.payload = error.response?.data" in contents

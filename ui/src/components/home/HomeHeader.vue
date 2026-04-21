@@ -6,6 +6,7 @@
       <p class="description">多商家点餐与智能推荐，先选口味，再快速完成下单。</p>
     </div>
     <div class="actions">
+      <span v-if="currentUser" class="current-user">当前用户：{{ currentUser.username }}</span>
       <el-button plain @click="$emit('open-login')">登录</el-button>
       <el-button plain @click="$emit('open-cart')">购物车</el-button>
       <el-button plain @click="$emit('open-address')">地址管理</el-button>
@@ -14,6 +15,13 @@
 </template>
 
 <script setup>
+defineProps({
+  currentUser: {
+    type: Object,
+    default: null,
+  },
+})
+
 defineEmits(['open-login', 'open-cart', 'open-address'])
 </script>
 
@@ -52,5 +60,14 @@ h1 {
 .actions {
   display: flex;
   gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.current-user {
+  color: #35507a;
+  font-size: 14px;
+  font-weight: 600;
 }
 </style>

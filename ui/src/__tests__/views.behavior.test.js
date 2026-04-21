@@ -52,6 +52,7 @@ vi.mock('../api/address', () => ({
 }))
 
 import AddressView from '../views/AddressView.vue'
+import HomeHeader from '../components/home/HomeHeader.vue'
 import LoginView from '../views/LoginView.vue'
 import MerchantDetailView from '../views/MerchantDetailView.vue'
 import MerchantListView from '../views/MerchantListView.vue'
@@ -106,7 +107,7 @@ const deferred = () => {
 
 describe('Task 11 guarded views', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.resetAllMocks()
   })
 
   test('MerchantDetailView keeps loading until dish data resolves and uses the fetched merchant id', async () => {
@@ -247,6 +248,136 @@ describe('Task 11 guarded views', () => {
     expect(wrapper.text()).toContain('湘菜')
   })
 
+  test('AddressView creates an address from the explicit create form', async () => {
+    listAddresses
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          id: 2,
+          label: '公司',
+          contact_name: '演示用户',
+          contact_phone: '13900000001',
+          city: '上海',
+          district: '长宁',
+          detail_address: '延安西路 889 号',
+          longitude: 121.41,
+          latitude: 31.21,
+          is_default: false,
+        },
+      ])
+    createAddress.mockResolvedValueOnce({
+      id: 2,
+      label: '公司',
+      contact_name: '演示用户',
+      contact_phone: '13900000001',
+      city: '上海',
+      district: '长宁',
+      detail_address: '延安西路 889 号',
+      longitude: 121.41,
+      latitude: 31.21,
+      is_default: false,
+    })
+
+    const wrapper = mount(AddressView, { global })
+    await flushPromises()
+
+    const createButton = wrapper.find('[data-test="open-create-address"]')
+    expect(createButton.exists()).toBe(true)
+
+    await createButton.trigger('click')
+    await wrapper.find('[data-test="address-label-input"]').setValue('公司')
+    await wrapper.find('[data-test="address-contact-name-input"]').setValue('演示用户')
+    await wrapper.find('[data-test="address-contact-phone-input"]').setValue('13900000001')
+    await wrapper.find('[data-test="address-city-input"]').setValue('上海')
+    await wrapper.find('[data-test="address-district-input"]').setValue('长宁')
+    await wrapper.find('[data-test="address-detail-input"]').setValue('延安西路 889 号')
+    await wrapper.find('[data-test="address-longitude-input"]').setValue('121.41')
+    await wrapper.find('[data-test="address-latitude-input"]').setValue('31.21')
+    await wrapper.find('[data-test="address-form"]').trigger('submit')
+    await flushPromises()
+
+    expect(createAddress).toHaveBeenCalledWith({
+      label: '公司',
+      contact_name: '演示用户',
+      contact_phone: '13900000001',
+      city: '上海',
+      district: '长宁',
+      detail_address: '延安西路 889 号',
+      longitude: 121.41,
+      latitude: 31.21,
+      is_default: false,
+    })
+    expect(wrapper.text()).toContain('公司')
+    expect(wrapper.text()).toContain('延安西路 889 号')
+  })
+
+  test('AddressView updates an address from the explicit edit form', async () => {
+    listAddresses
+      .mockResolvedValueOnce([
+        {
+          id: 1,
+          label: '家',
+          contact_name: '演示用户',
+          contact_phone: '13800000000',
+          city: '上海',
+          district: '静安',
+          detail_address: '南京西路 818 号',
+          longitude: 121.45,
+          latitude: 31.22,
+          is_default: false,
+        },
+      ])
+      .mockResolvedValueOnce([
+        {
+          id: 1,
+          label: '公司',
+          contact_name: '演示用户',
+          contact_phone: '13800000000',
+          city: '上海',
+          district: '静安',
+          detail_address: '南京西路 818 号 9 楼',
+          longitude: 121.45,
+          latitude: 31.22,
+          is_default: false,
+        },
+      ])
+    updateAddress.mockResolvedValueOnce({
+      id: 1,
+      label: '公司',
+      contact_name: '演示用户',
+      contact_phone: '13800000000',
+      city: '上海',
+      district: '静安',
+      detail_address: '南京西路 818 号 9 楼',
+      longitude: 121.45,
+      latitude: 31.22,
+      is_default: false,
+    })
+
+    const wrapper = mount(AddressView, { global })
+    await flushPromises()
+
+    await wrapper.find('[data-test="edit-address-1"]').trigger('click')
+    await wrapper.find('[data-test="address-label-input"]').setValue('公司')
+    await wrapper.find('[data-test="address-detail-input"]').setValue('南京西路 818 号 9 楼')
+    await wrapper.find('[data-test="address-form"]').trigger('submit')
+    await flushPromises()
+
+    expect(updateAddress).toHaveBeenCalledWith(1, {
+      label: '公司',
+      contact_name: '演示用户',
+      contact_phone: '13800000000',
+      city: '上海',
+      district: '静安',
+      detail_address: '南京西路 818 号 9 楼',
+      longitude: 121.45,
+      latitude: 31.22,
+      is_default: false,
+    })
+    expect(wrapper.text()).toContain('公司')
+    expect(wrapper.text()).toContain('南京西路 818 号 9 楼')
+  })
+
   test('AddressView can set an address as default from the dialog action area', async () => {
     listAddresses
       .mockResolvedValueOnce([
@@ -300,17 +431,18 @@ describe('Task 11 guarded views', () => {
     expect(setDefaultAddress).toHaveBeenCalledWith(1)
   })
 
-  test('LoginView auto-logins after register success and emits auth-success', async () => {
+  test('LoginView consumes the register session directly and emits auth-success', async () => {
     register.mockResolvedValueOnce({
-      id: 2,
-      username: 'new_user',
-      full_name: '新用户',
-      phone: '13900000000',
-    })
-    login.mockResolvedValueOnce({
       access_token: 'access-token',
       refresh_token: 'refresh-token',
       token_type: 'bearer',
+      user: {
+        id: 2,
+        username: 'new_user',
+        full_name: '新用户',
+        phone: '13900000000',
+      },
+      addresses: [],
     })
 
     const wrapper = mount(LoginView, { global })
@@ -329,8 +461,27 @@ describe('Task 11 guarded views', () => {
       full_name: '新用户',
       phone: '13900000000',
     })
-    expect(login).toHaveBeenCalledWith({ username: 'new_user', password: 'strongpass' })
+    expect(login).not.toHaveBeenCalled()
     expect(wrapper.emitted('auth-success')).toBeTruthy()
+  })
+
+  test('HomeHeader shows the current username while keeping the login button', () => {
+    const wrapper = mount(HomeHeader, {
+      props: {
+        currentUser: {
+          id: 2,
+          username: 'new_user',
+          full_name: '新用户',
+          phone: '13900000000',
+        },
+      },
+      global,
+    })
+
+    expect(wrapper.text()).toContain('当前用户：new_user')
+    expect(wrapper.text()).toContain('登录')
+    expect(wrapper.text()).toContain('购物车')
+    expect(wrapper.text()).toContain('地址管理')
   })
 })
 
