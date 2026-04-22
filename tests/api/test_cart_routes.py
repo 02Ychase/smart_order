@@ -104,3 +104,65 @@ def test_delete_missing_cart_item_does_not_create_cart() -> None:
         assert _count_carts() == 0
     finally:
         app.dependency_overrides.clear()
+
+
+
+def test_adding_same_dish_twice_increments_quantity() -> None:
+    from api.models.cart import CartItem
+    from api.models.catalog import Dish, DishCategory, Merchant
+    from sqlalchemy.orm import Session
+
+    Merchant.__table__.create(bind=engine, checkfirst=True)
+    DishCategory.__table__.create(bind=engine, checkfirst=True)
+    Dish.__table__.create(bind=engine, checkfirst=True)
+    CartItem.__table__.create(bind=engine, checkfirst=True)
+
+    with Session(engine) as session:
+        user = User(username="cart_user", password_hash="secret", full_name="购物车用户", phone="13900000000")
+        session.add(user)
+        session.flush()
+
+        merchant = Merchant(
+            name="川湘小馆",
+            description="下饭家常菜",
+            city="上海",
+            district="静安",
+            address="南京西路 100 号",
+            longitude=121.45,
+            latitude=31.23,
+        )
+        session.add(merchant)
+        session.flush()
+
+        category = DishCategory(merchant_id=merchant.id, name="招牌菜", sort_order=1)
+        session.add(category)
+        session.flush()
+
+        dish = Dish(
+            merchant_id=merchant.id,
+            category_id=category.id,
+            name="鱼香肉丝",
+            description="酸甜开胃",
+            price=28,
+        )
+        session.add(dish)
+        session.commit()
+        user_id = user.id
+        dish_id = dish.id
+
+    app.dependency_overrides[cart_routes.get_current_user] = lambda: type("User", (), {"id": user_id})()
+    try:
+        first_response = client.post("/cart/items", json={"dish_id": dish_id, "quantity": 1})
+        second_response = client.post("/cart/items", json={"dish_id": dish_id, "quantity": 1})
+        cart_response = client.get("/cart")
+
+        assert first_response.status_code == 200
+        assert second_response.status_code == 200
+        assert second_response.json() == {"success": True, "dish_id": dish_id, "quantity": 2}
+        assert cart_response.status_code == 200
+        assert cart_response.json()["items"][0]["items"] == [
+            {"dish_id": dish_id, "dish_name": "鱼香肉丝", "quantity": 2, "unit_price": 28.0}
+        ]
+        assert cart_response.json()["goods_amount"] == 56.0
+    finally:
+        app.dependency_overrides.clear()

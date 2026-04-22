@@ -80,7 +80,13 @@ describe('homepage shell', () => {
     expect(consoleWarnSpy).not.toHaveBeenCalled()
   })
 
-  test('App closes the login dialog after LoginView emits auth-success', async () => {
+
+  test('App opens the login dialog when MerchantDetailView requests login for add-to-cart', async () => {
+    const MerchantDetailViewStub = defineComponent({
+      emits: ['request-login'],
+      template: '<button data-test="request-login" @click="$emit(\'request-login\')">request</button>',
+    })
+
     const wrapper = mount(App, {
       global: {
         stubs: {
@@ -92,28 +98,27 @@ describe('homepage shell', () => {
           'el-button': { template: '<button><slot /></button>' },
           'el-input': { template: '<input />' },
           'el-empty': { template: '<div class="empty-state"></div>' },
-          HomeHeader: {
-            emits: ['open-login'],
-            template: '<button data-test="open-login" @click="$emit(\'open-login\')">open</button>',
+          HomeHeader: false,
+          CategoryFilterBar: false,
+          MerchantListView: {
+            emits: ['select-merchant'],
+            template: '<button data-test="open-merchant" @click="$emit(\'select-merchant\', 42)">merchant</button>',
           },
-          CategoryFilterBar: simpleStub('CategoryFilterBar'),
-          MerchantListView: simpleStub('MerchantListView'),
-          FloatingAssistant: simpleStub('FloatingAssistant'),
+          FloatingAssistant: false,
           LoginView: LoginViewStub,
           CheckoutView: simpleStub('CheckoutView'),
           AddressView: simpleStub('AddressView'),
-          MerchantDetailView: simpleStub('MerchantDetailView'),
+          MerchantDetailView: MerchantDetailViewStub,
         },
       },
     })
 
-    await wrapper.find('[data-test="open-login"]').trigger('click')
-    expect(wrapper.find('[data-test="login-success"]').exists()).toBe(true)
-
-    await wrapper.find('[data-test="login-success"]').trigger('click')
+    await wrapper.find('[data-test="open-merchant"]').trigger('click')
+    await nextTick()
+    await wrapper.find('[data-test="request-login"]').trigger('click')
     await nextTick()
 
-    expect(wrapper.find('[data-test="login-success"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="login-success"]').exists()).toBe(true)
   })
 })
 

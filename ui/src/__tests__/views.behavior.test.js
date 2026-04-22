@@ -14,6 +14,12 @@ const { register, login } = vi.hoisted(() => ({
   login: vi.fn(),
 }))
 
+const { getCart, addCartItem, removeCartItem } = vi.hoisted(() => ({
+  getCart: vi.fn(),
+  addCartItem: vi.fn(),
+  removeCartItem: vi.fn(),
+}))
+
 vi.mock('../api/catalog', () => ({
   listMerchants,
   listMerchantDishes,
@@ -27,6 +33,12 @@ vi.mock('../api/orders', () => ({
 vi.mock('../api/auth', () => ({
   register,
   login,
+}))
+
+vi.mock('../api/cart', () => ({
+  getCart,
+  addCartItem,
+  removeCartItem,
 }))
 
 const {
@@ -52,11 +64,13 @@ vi.mock('../api/address', () => ({
 }))
 
 import AddressView from '../views/AddressView.vue'
+import CheckoutView from '../views/CheckoutView.vue'
 import HomeHeader from '../components/home/HomeHeader.vue'
 import LoginView from '../views/LoginView.vue'
 import MerchantDetailView from '../views/MerchantDetailView.vue'
 import MerchantListView from '../views/MerchantListView.vue'
 import OrderDetailView from '../views/OrderDetailView.vue'
+import { useAuth } from '../composables/useAuth'
 
 const global = {
   stubs: {
@@ -108,6 +122,8 @@ const deferred = () => {
 describe('Task 11 guarded views', () => {
   beforeEach(() => {
     vi.resetAllMocks()
+    window.localStorage.clear()
+    useAuth().logout()
   })
 
   test('MerchantDetailView keeps loading until dish data resolves and uses the fetched merchant id', async () => {
@@ -429,6 +445,118 @@ describe('Task 11 guarded views', () => {
     await flushPromises()
 
     expect(setDefaultAddress).toHaveBeenCalledWith(1)
+  })
+
+  test('CheckoutView deletes a cart row and refreshes grouped cart data', async () => {
+    getCart
+      .mockResolvedValueOnce({
+        items: [
+          {
+            merchant_id: 5,
+            merchant_name: '川湘小馆',
+            items: [{ dish_id: 9, dish_name: '红烧牛肉面', quantity: 2, unit_price: 19 }],
+            subtotal: 38,
+          },
+        ],
+        goods_amount: 38,
+      })
+      .mockResolvedValueOnce({ items: [], goods_amount: 0 })
+    removeCartItem.mockResolvedValueOnce({ success: true, dish_id: 9 })
+
+    const wrapper = mount(CheckoutView, { global })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('川湘小馆')
+    expect(wrapper.text()).toContain('红烧牛肉面')
+    expect(wrapper.text()).toContain('¥19.00')
+
+    await wrapper.find('[data-test="remove-cart-item-9"]').trigger('click')
+    await flushPromises()
+
+    expect(removeCartItem).toHaveBeenCalledWith(9)
+    expect(getCart).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('购物车为空')
+  })
+
+  test('CheckoutView renders grouped cart rows, total, and disables checkout when empty', async () => {
+    getCart.mockResolvedValueOnce({
+      items: [
+        {
+          merchant_id: 5,
+          merchant_name: '川湘小馆',
+          items: [
+            { dish_id: 9, dish_name: '红烧牛肉面', quantity: 2, unit_price: 19 },
+            { dish_id: 10, dish_name: '宫保鸡丁', quantity: 1, unit_price: 24 },
+          ],
+          subtotal: 62,
+        },
+      ],
+      goods_amount: 62,
+    })
+
+    const wrapper = mount(CheckoutView, { global })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('川湘小馆')
+    expect(wrapper.text()).toContain('红烧牛肉面')
+    expect(wrapper.text()).toContain('宫保鸡丁')
+    expect(wrapper.text()).toContain('¥19.00')
+    expect(wrapper.text()).toContain('¥24.00')
+    expect(wrapper.text()).toContain('× 2')
+    expect(wrapper.text()).toContain('小计 ¥62.00')
+    expect(wrapper.text()).toContain('商品总价 ¥62.00')
+  })
+
+  test('MerchantDetailView adds a dish to the persisted cart when logged in', async () => {
+    useAuth().currentUser.value = {
+      id: 2,
+      username: 'new_user',
+      full_name: '新用户',
+      phone: '13900000000',
+    }
+    listMerchantDishes.mockResolvedValueOnce([
+      { id: 7, name: '宫保鸡丁', description: '招牌微辣', price: 24 },
+    ])
+    addCartItem.mockResolvedValueOnce({
+      items: [
+        {
+          merchant_id: 42,
+          merchant_name: '川湘小馆',
+          items: [{ dish_id: 7, dish_name: '宫保鸡丁', quantity: 1, unit_price: 24 }],
+          subtotal: 24,
+        },
+      ],
+      goods_amount: 24,
+    })
+
+    const wrapper = mount(MerchantDetailView, {
+      props: { merchantId: 42 },
+      global,
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-test="add-cart-7"]').trigger('click')
+    await flushPromises()
+
+    expect(addCartItem).toHaveBeenCalledWith({ dish_id: 7, quantity: 1 })
+  })
+
+  test('MerchantDetailView emits request-login instead of adding to cart when logged out', async () => {
+    useAuth().logout()
+    listMerchantDishes.mockResolvedValueOnce([
+      { id: 7, name: '宫保鸡丁', description: '招牌微辣', price: 24 },
+    ])
+
+    const wrapper = mount(MerchantDetailView, {
+      props: { merchantId: 42 },
+      global,
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-test="add-cart-7"]').trigger('click')
+
+    expect(addCartItem).not.toHaveBeenCalled()
+    expect(wrapper.emitted('request-login')).toBeTruthy()
   })
 
   test('LoginView consumes the register session directly and emits auth-success', async () => {

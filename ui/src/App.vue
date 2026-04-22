@@ -32,7 +32,7 @@
       <AddressView />
     </el-dialog>
     <el-drawer v-model="merchantDrawerOpen" size="480px" destroy-on-close>
-      <MerchantDetailView :merchant-id="selectedMerchantId" />
+      <MerchantDetailView :merchant-id="selectedMerchantId" @request-login="loginOpen = true" />
     </el-drawer>
   </div>
 </template>

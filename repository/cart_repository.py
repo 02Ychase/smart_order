@@ -58,7 +58,7 @@ class CartRepository:
             )
             self.session.add(item)
         else:
-            item.quantity = quantity
+            item.quantity += quantity
             item.unit_price_snapshot = dish.price
 
         self.session.commit()
