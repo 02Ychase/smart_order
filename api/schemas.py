@@ -184,6 +184,7 @@ class MockPayResponse(BaseModel):
 class AssistantChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=500)
     session_id: str | None = None
+    user_id: int | None = None
 
 
 class AssistantConstraintResponse(BaseModel):
@@ -222,7 +223,7 @@ class AssistantCitationResponse(BaseModel):
 class AssistantChatResponse(BaseModel):
     session_id: str
     message: str
-    response_type: Literal["greeting", "clarification", "action_pending", "recommendation", "comparison", "knowledge", "unsupported"] = "recommendation"
+    response_type: Literal["greeting", "clarification", "action_pending", "action_completed", "recommendation", "comparison", "knowledge", "unsupported"] = "recommendation"
     needs_clarification: bool = False
     clarification_question: str | None = None
     extracted_constraints: AssistantConstraintResponse | None = None

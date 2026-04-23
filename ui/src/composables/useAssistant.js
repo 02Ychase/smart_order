@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { chatWithAssistant } from '../api/assistant'
+import { useAuth } from './useAuth'
 
 export function useAssistant() {
   const sessionId = ref(null)
@@ -19,6 +20,8 @@ export function useAssistant() {
   const comparisons = ref([])
   const citations = ref([])
   const suggestedActions = ref([])
+
+  const { currentUser } = useAuth()
 
   const submit = async () => {
     const question = draft.value.trim()
@@ -40,10 +43,14 @@ export function useAssistant() {
     suggestedActions.value = []
 
     try {
-      const response = await chatWithAssistant({
+      const payload = {
         message: question,
         session_id: sessionId.value,
-      })
+      }
+      if (currentUser.value?.id) {
+        payload.user_id = currentUser.value.id
+      }
+      const response = await chatWithAssistant(payload)
       sessionId.value = response.session_id
       lastResponseType.value = response.response_type
       messages.value.push({ role: 'assistant', text: response.message })

@@ -3,6 +3,7 @@ import os
 from sqlalchemy.orm import Session
 
 from api.schemas import AssistantChatRequest, AssistantChatResponse, AssistantHealthResponse
+from service.agent_loop import AgentLoop
 from service.assistant_composer import compose_assistant_response
 from service.assistant_constraint_parser import parse_assistant_query
 from service.assistant_retriever import AssistantRetriever
@@ -23,6 +24,7 @@ class AssistantService:
         self.intent_router = IntentRouter()
         self.constraint_resolver = ConstraintResolver()
         self.grounded_responder = GroundedResponder()
+        self.agent_loop = AgentLoop(session)
 
     def chat(self, request: AssistantChatRequest) -> AssistantChatResponse:
         state = self.session_store.get_or_create(request.session_id)
@@ -47,8 +49,27 @@ class AssistantService:
             )
             return {**response, "session_id": state.session_id}
 
-        # Step 3: Handle action intent
+        # Step 3: Handle action intent via AgentLoop when user_id is available
         if routing.intent == "action_intent":
+            user_id = getattr(request, "user_id", None)
+            if user_id:
+                try:
+                    response = self.agent_loop.run(
+                        intent="action_intent",
+                        user_message=request.message,
+                        constraints=None,
+                        user_id=user_id,
+                    )
+                    self.session_store.update(
+                        session_id=state.session_id,
+                        user_message=request.message,
+                        parsed_query=None,
+                        candidate_ids=[],
+                    )
+                    return {**response, "session_id": state.session_id}
+                except Exception:
+                    pass  # Fall through to action_pending fallback
+
             response = self.grounded_responder.respond(
                 intent="action_intent",
                 user_message=request.message,

@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -78,3 +79,17 @@ def test_chat_requests_clarification_for_sparse_recommendation() -> None:
     assert response["response_type"] == "clarification"
     assert response["recommendations"] == []
     assert "预算" in response["message"] or "几个人" in response["message"]
+
+
+def test_chat_executes_action_intent_via_agent_loop() -> None:
+    service = AssistantService(DummySession())
+    llm_response = '{"thought": "用户想加购", "action": "add_to_cart", "action_input": {"user_id": 1, "dish_id": 11, "quantity": 1}}'
+
+    with patch("service.agent_loop.call_llm", return_value=llm_response):
+        service.agent_loop.tool_registry.execute = MagicMock(return_value={"success": True, "dish_id": 11, "quantity": 1})
+        response = service.chat(
+            SimpleNamespace(message="帮我加入购物车", session_id=None, user_id=1)
+        )
+
+    assert response["response_type"] == "action_completed"
+    assert "tool_result" in response
