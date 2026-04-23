@@ -30,6 +30,7 @@ def test_assistant_service_returns_clarification_before_retrieval(monkeypatch) -
     service = AssistantService(DummySession())
     response = service.chat(SimpleNamespace(message="推荐几种川菜", session_id=None))
 
+    assert response["response_type"] == "clarification"
     assert response["needs_clarification"] is True
     assert retrieve_called["value"] is False
 
@@ -68,6 +69,7 @@ def test_assistant_service_returns_grounded_dish_recommendations(monkeypatch) ->
     )
 
     assert response["session_id"] == "session-1"
+    assert response["response_type"] == "recommendation"
     assert response["needs_clarification"] is False
     assert response["recommendations"][0]["dish_name"] == "鱼香肉丝"
     assert response["citations"][0]["source_type"] == "dish"

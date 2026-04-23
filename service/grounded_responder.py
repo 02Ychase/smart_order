@@ -22,6 +22,9 @@ class GroundedResponder:
             return {
                 "message": "你好！我是你的智能点餐助手，可以帮你推荐菜品、比较商家，或者回答关于餐厅的问题。",
                 "response_type": "greeting",
+                "needs_clarification": False,
+                "clarification_question": None,
+                "extracted_constraints": None,
                 "recommendations": [],
                 "comparisons": [],
                 "citations": [],
@@ -32,6 +35,9 @@ class GroundedResponder:
             return {
                 "message": "我已经理解你的意图，但该功能将在下一阶段开放。",
                 "response_type": "action_pending",
+                "needs_clarification": False,
+                "clarification_question": None,
+                "extracted_constraints": None,
                 "recommendations": [],
                 "comparisons": [],
                 "citations": [],
@@ -42,6 +48,9 @@ class GroundedResponder:
             return {
                 "message": "抱歉，我暂时还无法处理这个请求。你可以问我关于菜品推荐、商家比较或餐厅信息的问题。",
                 "response_type": "unsupported",
+                "needs_clarification": False,
+                "clarification_question": None,
+                "extracted_constraints": None,
                 "recommendations": [],
                 "comparisons": [],
                 "citations": [],
@@ -89,6 +98,7 @@ class GroundedResponder:
         return {
             "message": message,
             "response_type": response_type,
+            "needs_clarification": False,
             "recommendations": recommendations,
             "comparisons": comparisons,
             "citations": citations,

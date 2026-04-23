@@ -222,9 +222,10 @@ class AssistantCitationResponse(BaseModel):
 class AssistantChatResponse(BaseModel):
     session_id: str
     message: str
-    needs_clarification: bool
+    response_type: Literal["greeting", "clarification", "action_pending", "recommendation", "comparison", "knowledge", "unsupported"] = "recommendation"
+    needs_clarification: bool = False
     clarification_question: str | None = None
-    extracted_constraints: AssistantConstraintResponse
+    extracted_constraints: AssistantConstraintResponse | None = None
     recommendations: list[AssistantRecommendationResponse] = Field(default_factory=list)
     comparisons: list[AssistantComparisonResponse] = Field(default_factory=list)
     citations: list[AssistantCitationResponse] = Field(default_factory=list)

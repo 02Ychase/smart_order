@@ -92,7 +92,7 @@ class AssistantService:
                 "response_type": "clarification",
                 "needs_clarification": True,
                 "clarification_question": "请告诉我这顿大概几个人吃、预算多少？",
-                "extracted_constraints": {},
+                "extracted_constraints": None,
                 "recommendations": [],
                 "comparisons": [],
                 "citations": [],
