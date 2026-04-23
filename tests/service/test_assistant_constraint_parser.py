@@ -40,3 +40,13 @@ def test_parse_assistant_query_leaves_generic_comparison_without_literal_targets
 
     assert parsed.query_type == "comparison"
     assert parsed.comparison_targets == []
+
+
+def test_parse_assistant_query_extracts_budget_without_yuan_suffix() -> None:
+    parsed = parse_assistant_query("帮我推荐几个川菜，3个人预算200")
+
+    assert parsed.query_type == "recommendation"
+    assert parsed.cuisine_types == ["川菜"]
+    assert parsed.party_size == 3
+    assert parsed.budget_max == 200.0
+    assert parsed.needs_clarification is False

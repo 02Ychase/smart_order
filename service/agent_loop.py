@@ -106,7 +106,7 @@ class AgentLoop:
             tool_result = self.tool_registry.execute(action, action_input)
             return {"response_type": "action_completed", "tool_result": tool_result}
 
-        return {"response_type": "direct", "message": parsed.get("thought", "已完成思考。")}
+        return {"response_type": "action_pending", "message": parsed.get("thought", "我已理解你的意图，请提供更多细节以便执行。")}
 
     @staticmethod
     def _clean_json_response(raw: str) -> str:

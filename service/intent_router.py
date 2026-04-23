@@ -30,9 +30,9 @@ _INTENT_ROUTER_PROMPT = """你是一个智能点餐助手的意图分类器。
 
 意图类型必须是以下之一：
 - greeting: 打招呼、问候（如"你好"、"Hi"、"在吗"）
-- recommendation: 推荐菜品或商家（如"推荐川菜"、"吃什么好"）
+- recommendation: 请求个性化推荐，需要了解用户口味/人数/预算（如"推荐川菜"、"吃什么好"、"帮我选几个菜"）
 - comparison: 比较多个商家或菜品（如"比较A和B"、"A和B哪个好"）
-- knowledge: 查询具体信息（如"几点营业"、"电话多少"、"多少钱"）
+- knowledge: 查询信息、列举列表、了解详情，不需要个性化推荐（如"几点营业"、"电话多少"、"多少钱"、"有哪些卖咖啡的店"、"你们有什么菜"）
 - action_intent: 执行操作意图（如"加入购物车"、"添加地址"、"下单"）
 - unsupported: 无法处理的请求
 
@@ -102,7 +102,7 @@ class IntentRouter:
         if any(w in msg for w in ("推荐", "吃什么", "适合", "推荐菜", "推荐商家")):
             return RoutingResult("recommendation", requires_retrieval=True)
 
-        if any(w in msg for w in ("几点", "营业", "电话", "地址", "多少钱", "价格", "口味", "配料")):
+        if any(w in msg for w in ("几点", "营业", "电话", "地址", "多少钱", "价格", "口味", "配料", "有哪些", "有什么")):
             return RoutingResult("knowledge", requires_retrieval=True)
 
         return RoutingResult("unsupported", requires_retrieval=False)

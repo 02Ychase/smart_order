@@ -93,3 +93,41 @@ def test_chat_executes_action_intent_via_agent_loop() -> None:
 
     assert response["response_type"] == "action_completed"
     assert "tool_result" in response
+
+
+def test_chat_does_not_clarify_for_knowledge_query_about_coffee_shops(monkeypatch) -> None:
+    """知识类查询（如"有哪些卖咖啡的店"）不应要求人数和预算澄清。"""
+    from service.assistant_models import AssistantCandidate
+
+    class StubRetriever:
+        def __init__(self, session):
+            self.session = session
+
+        def retrieve(self, parsed):
+            return [
+                AssistantCandidate(
+                    source_type="merchant",
+                    source_id=2,
+                    merchant_id=2,
+                    merchant_name="午后豆房",
+                    dish_id=None,
+                    dish_name=None,
+                    price=0.0,
+                    score=0.88,
+                    summary="精品手冲咖啡和法式甜点",
+                    reason_facts=["咖啡甜品", "手冲"],
+                    citation_title="午后豆房",
+                    citation_snippet="咖啡甜品；精品手冲",
+                )
+            ]
+
+    monkeypatch.setattr("service.assistant_service.AssistantRetriever", StubRetriever, raising=False)
+
+    service = AssistantService(DummySession())
+    response = service.chat(
+        SimpleNamespace(message="有哪些卖咖啡的店", session_id="session-coffee")
+    )
+
+    assert response["response_type"] != "clarification"
+    assert response["needs_clarification"] is False
+    assert len(response.get("recommendations", [])) >= 1 or len(response.get("comparisons", [])) >= 1 or response["message"] != ""

@@ -105,14 +105,14 @@ class AssistantService:
         # Step 5: Resolve constraints for recommendation/comparison/knowledge
         constraints = self.constraint_resolver.resolve(request.message)
 
-        # Step 6: Check if clarification needed
-        if routing.intent == "recommendation" and not constraints.is_sufficient_for_recommendation():
+        # Step 6: Check if clarification needed (respect parser judgment, not hardcoded rules)
+        if routing.intent == "recommendation" and constraints.needs_clarification:
             return {
                 "session_id": state.session_id,
-                "message": "请告诉我这顿大概几个人吃、预算多少？",
+                "message": constraints.clarification_question or "请告诉我这顿大概几个人吃、预算多少？",
                 "response_type": "clarification",
                 "needs_clarification": True,
-                "clarification_question": "请告诉我这顿大概几个人吃、预算多少？",
+                "clarification_question": constraints.clarification_question or "请告诉我这顿大概几个人吃、预算多少？",
                 "extracted_constraints": None,
                 "recommendations": [],
                 "comparisons": [],

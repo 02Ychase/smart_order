@@ -1,16 +1,120 @@
+import logging
 import os
+from http import HTTPStatus
 
-from pinecone import Pinecone
+import dashscope
+from pinecone import Pinecone, ServerlessSpec
+
+logger = logging.getLogger(__name__)
 
 
 class AssistantVectorStore:
     def __init__(self) -> None:
         self.api_key = os.getenv("PINECONE_API_KEY")
         self.index_name = os.getenv("PINECONE_ASSISTANT_INDEX", "smart-order-assistant")
-        self._client = Pinecone(api_key=self.api_key) if self.api_key else None
+        self.dashscope_api_key = os.getenv("DASHSCOPE_API_KEY")
+        self.pinecone_env = os.getenv("PINECONE_ENY", "us-east-1")
+        self.dimension = 1536
+        self.embedding_model = "text-embedding-v4"
+
+        self._client = None
+        self._index = None
+
+        if self.api_key:
+            try:
+                self._client = Pinecone(api_key=self.api_key)
+                if not self._client.has_index(self.index_name):
+                    logger.info(f"Creating Pinecone index: {self.index_name}")
+                    self._client.create_index(
+                        name=self.index_name,
+                        vector_type="dense",
+                        dimension=self.dimension,
+                        metric="cosine",
+                        spec=ServerlessSpec(cloud="aws", region=self.pinecone_env),
+                    )
+                self._index = self._client.Index(self.index_name)
+                logger.info(f"Pinecone index ready: {self.index_name}")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Pinecone index: {e}")
 
     def is_ready(self) -> bool:
-        return self._client is not None
+        return self._client is not None and self._index is not None
+
+    def _embed(self, text: str) -> list[float] | None:
+        if not self.dashscope_api_key:
+            return None
+        try:
+            resp = dashscope.TextEmbedding.call(
+                model=self.embedding_model,
+                input=text,
+                dimension=self.dimension,
+                api_key=self.dashscope_api_key,
+            )
+            if resp["status_code"] == HTTPStatus.OK:
+                return resp.get("output", {}).get("embeddings", [{}])[0].get("embedding")
+            else:
+                logger.error("Embedding request failed")
+                return None
+        except Exception as e:
+            logger.error(f"Embedding request failed: {e}")
+            return None
+
+    def semantic_search(self, query: str, top_k: int = 5, namespace: str = "") -> list[dict]:
+        if not self.is_ready():
+            return []
+
+        query_vector = self._embed(query)
+        if not query_vector or len(query_vector) != self.dimension:
+            return []
+
+        try:
+            kwargs = {"vector": query_vector, "top_k": top_k, "include_metadata": True}
+            if namespace:
+                kwargs["namespace"] = namespace
+            result = self._index.query(**kwargs)
+            matches = result.get("matches", [])
+            return [
+                {
+                    "id": m["id"],
+                    "score": m["score"],
+                    "metadata": m.get("metadata", {}),
+                }
+                for m in matches
+            ]
+        except Exception as e:
+            logger.error(f"Semantic search failed: {e}")
+            return []
+
+    def upsert_candidates(self, candidates: list[dict], batch_size: int = 30, namespace: str = "") -> bool:
+        if not self.is_ready():
+            return False
+
+        batch = []
+        for candidate in candidates:
+            text = candidate.get("text", "")
+            vector = self._embed(text)
+            if not vector or len(vector) != self.dimension:
+                logger.error("Invalid embedding for candidate")
+                return False
+
+            metadata = candidate.get("metadata", {})
+            metadata["content"] = text
+            batch.append((candidate["id"], vector, metadata))
+
+            if len(batch) >= batch_size:
+                kwargs = {"vectors": batch}
+                if namespace:
+                    kwargs["namespace"] = namespace
+                self._index.upsert(**kwargs)
+                batch = []
+
+        if batch:
+            kwargs = {"vectors": batch}
+            if namespace:
+                kwargs["namespace"] = namespace
+            self._index.upsert(**kwargs)
+
+        return True
 
     def semantic_scores(self, query: str, candidates: list[dict]) -> dict[int, float]:
         if not self.is_ready() or not candidates:

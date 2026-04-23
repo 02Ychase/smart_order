@@ -5,7 +5,7 @@ from service.assistant_models import AssistantParsedQuery
 CUISINE_KEYWORDS = ["川菜", "湘菜", "粤菜", "轻食", "咖啡甜品"]
 ALLERGEN_KEYWORDS = ["花生", "麸质", "牛奶", "鸡蛋", "海鲜"]
 COMPARISON_SPLITTER = re.compile(r"和|与")
-BUDGET_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*元(?:以内|以下|之内)?")
+BUDGET_PATTERN = re.compile(r"(?:预算\s*)(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*(?:元|块)(?:以内|以下|之内)?")
 PARTY_SIZE_PATTERN = re.compile(r"(\d+)\s*(?:个人|人)")
 
 
@@ -43,7 +43,7 @@ def parse_assistant_query(message: str) -> AssistantParsedQuery:
         raw_message=message,
         query_type=query_type,
         cuisine_types=cuisine_types,
-        budget_max=float(budget_match.group(1)) if budget_match else None,
+        budget_max=float(budget_match.group(1) or budget_match.group(2)) if budget_match else None,
         party_size=int(party_size_match.group(1)) if party_size_match else None,
         exclude_allergens=exclude_allergens,
         comparison_targets=comparison_targets,

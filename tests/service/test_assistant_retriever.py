@@ -13,6 +13,17 @@ class DummyVectorStore:
     def semantic_scores(self, query: str, candidates: list[dict]) -> dict[int, float]:
         return {}
 
+    def semantic_search(self, query: str, top_k: int = 5, namespace: str = "") -> list[dict]:
+        return []
+
+    def is_ready(self) -> bool:
+        return False
+
+
+class DummyQueryRefiner:
+    def refine(self, message: str) -> str:
+        return message
+
 
 class StubCatalogService:
     def list_merchants(self, district: str | None = None) -> list[dict]:
@@ -71,6 +82,7 @@ class StubRetriever(AssistantRetriever):
     def __init__(self) -> None:
         self.catalog_service = StubCatalogService()
         self.vector_store = DummyVectorStore()
+        self.query_refiner = DummyQueryRefiner()
 
 
 def test_retriever_returns_candidates_for_seed_taxonomy_variant() -> None:
