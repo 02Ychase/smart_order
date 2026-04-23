@@ -53,6 +53,8 @@ describe('homepage shell', () => {
           'el-button': { template: '<button><slot /></button>' },
           'el-input': { template: '<input />' },
           'el-empty': { template: '<div class="empty-state"></div>' },
+          'el-tag': { template: '<span><slot /></span>' },
+          'el-scrollbar': { template: '<div><slot /></div>' },
           HomeHeader: false,
           CategoryFilterBar: false,
           MerchantListView: false,
@@ -77,6 +79,8 @@ describe('homepage shell', () => {
     expect(wrapper.text()).toContain('经典川味')
     expect(wrapper.text()).toContain('你好，欢迎来到 smart_order。')
     expect(wrapper.text()).toContain('我可以根据你的口味、人数和预算')
+    expect(wrapper.text()).toContain('智能助手')
+    expect(wrapper.text()).toContain('发送')
     expect(consoleWarnSpy).not.toHaveBeenCalled()
   })
 
@@ -98,6 +102,8 @@ describe('homepage shell', () => {
           'el-button': { template: '<button><slot /></button>' },
           'el-input': { template: '<input />' },
           'el-empty': { template: '<div class="empty-state"></div>' },
+          'el-tag': { template: '<span><slot /></span>' },
+          'el-scrollbar': { template: '<div><slot /></div>' },
           HomeHeader: false,
           CategoryFilterBar: false,
           MerchantListView: {

@@ -181,6 +181,63 @@ class MockPayResponse(BaseModel):
     order_status: str
 
 
+class AssistantChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=500)
+    session_id: str | None = None
+
+
+class AssistantConstraintResponse(BaseModel):
+    query_type: Literal["recommendation", "comparison", "knowledge"]
+    cuisine_types: list[str] = Field(default_factory=list)
+    budget_max: float | None = None
+    party_size: int | None = None
+    exclude_allergens: list[str] = Field(default_factory=list)
+    comparison_targets: list[str] = Field(default_factory=list)
+
+
+class AssistantRecommendationResponse(BaseModel):
+    source_type: Literal["dish", "merchant"]
+    merchant_id: int
+    merchant_name: str
+    dish_id: int | None = None
+    dish_name: str | None = None
+    price: float | None = None
+    reason: str
+
+
+class AssistantComparisonResponse(BaseModel):
+    merchant_id: int
+    merchant_name: str
+    summary: str
+    highlights: list[str] = Field(default_factory=list)
+
+
+class AssistantCitationResponse(BaseModel):
+    source_type: Literal["dish", "merchant"]
+    source_id: int
+    title: str
+    snippet: str
+
+
+class AssistantChatResponse(BaseModel):
+    session_id: str
+    message: str
+    needs_clarification: bool
+    clarification_question: str | None = None
+    extracted_constraints: AssistantConstraintResponse
+    recommendations: list[AssistantRecommendationResponse] = Field(default_factory=list)
+    comparisons: list[AssistantComparisonResponse] = Field(default_factory=list)
+    citations: list[AssistantCitationResponse] = Field(default_factory=list)
+    suggested_actions: list[str] = Field(default_factory=list)
+
+
+class AssistantHealthResponse(BaseModel):
+    status: str
+    llm_ready: bool
+    vector_store_ready: bool
+    degraded_mode: bool
+
+
 class HealthResponse(BaseModel):
     status: str
     service: str

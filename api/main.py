@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 
-from api.routes import address_router, agent_context_router, auth_router, cart_router, catalog_router, health_router, orders_router
+from api.routes import address_router, agent_context_router, assistant_router, auth_router, cart_router, catalog_router, health_router, orders_router
 
 
 class RouteSurfaceFastAPI(FastAPI):
@@ -51,6 +51,7 @@ app = RouteSurfaceFastAPI(
 app.include_router(auth_router)
 app.include_router(address_router)
 app.include_router(agent_context_router)
+app.include_router(assistant_router)
 app.include_router(catalog_router)
 app.include_router(cart_router)
 app.include_router(orders_router)

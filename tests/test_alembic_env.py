@@ -105,3 +105,25 @@ def test_app_db_prefers_environment_database_url_over_dotenv() -> None:
     )
 
     assert database_url == "sqlite:///from-environment.db"
+
+
+
+def test_app_db_uses_parent_repo_dotenv_when_worktree_has_no_local_env(tmp_path, monkeypatch) -> None:
+    repo_root = tmp_path / "repo"
+    worktree_root = repo_root / ".claude" / "worktrees" / "feature"
+    git_worktree_dir = repo_root / ".git" / "worktrees" / "feature"
+    git_worktree_dir.mkdir(parents=True)
+    worktree_root.mkdir(parents=True)
+
+    (repo_root / ".env").write_text("DATABASE_URL=sqlite:///from-parent-repo.db\n", encoding="utf-8")
+    (worktree_root / ".git").write_text(
+        f"gitdir: {git_worktree_dir.as_posix()}\n",
+        encoding="utf-8",
+    )
+
+    import api.db as api_db
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    database_url = api_db.resolve_database_url(worktree_root)
+
+    assert database_url == "sqlite:///from-parent-repo.db"
