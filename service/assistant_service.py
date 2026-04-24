@@ -6,6 +6,7 @@ from api.schemas import AssistantChatRequest, AssistantChatResponse, AssistantHe
 from service.agent_core import AgentCore
 from service.agent_loop import AgentLoop
 from service.assistant_composer import compose_assistant_response
+from service.assistant_orchestrator import AssistantOrchestrator
 from service.assistant_retriever import AssistantRetriever
 from service.assistant_session_store import InMemoryAssistantSessionStore
 from service.grounded_responder import GroundedResponder
@@ -125,12 +126,24 @@ class AssistantService:
         return [c.to_dict() for c in candidates] if candidates else []
 
     def chat(self, request: AssistantChatRequest) -> AssistantChatResponse:
+        if not isinstance(request, AssistantChatRequest):
+            return self._legacy_chat(request)
+
+        orchestrator = AssistantOrchestrator(
+            session=self.session,
+            session_store=self.session_store,
+        )
+        return orchestrator.chat(
+            message=request.message,
+            session_id=request.session_id,
+            user_id=getattr(request, "user_id", None),
+        )
+
+    def _legacy_chat(self, request) -> dict:
         state = self.session_store.get_or_create(request.session_id)
 
-        # === NEW: LLM-driven Agent Core decides the flow ===
         decision = self.agent_core.decide(request.message)
 
-        # Step 1: Handle greeting directly
         if decision.intent == "greeting":
             response = self.grounded_responder.respond(
                 intent="greeting",
@@ -147,7 +160,6 @@ class AssistantService:
             )
             return {**response, "session_id": state.session_id}
 
-        # Step 2: Check if LLM says clarification is needed
         if decision.needs_clarification:
             return {
                 "session_id": state.session_id,
@@ -162,7 +174,6 @@ class AssistantService:
                 "suggested_actions": [],
             }
 
-        # Step 3: Handle action intent via AgentLoop when user_id is available
         if decision.intent == "action":
             user_id = getattr(request, "user_id", None)
             if user_id and decision.tool_calls:
@@ -202,7 +213,6 @@ class AssistantService:
             )
             return {**response, "session_id": state.session_id}
 
-        # Step 4: Handle unsupported
         if decision.intent == "unsupported":
             response = self.grounded_responder.respond(
                 intent="unsupported",
@@ -219,7 +229,6 @@ class AssistantService:
             )
             return {**response, "session_id": state.session_id}
 
-        # Step 5: Execute tool calls decided by LLM
         tool_results = []
         if decision.tool_calls:
             for tool_call in decision.tool_calls:
@@ -232,7 +241,6 @@ class AssistantService:
                 except Exception as e:
                     tool_results.append({"tool": tool_call["name"], "error": str(e)})
 
-        # Step 6: Retrieve evidence if needed (fallback for knowledge/recommendation)
         candidates = []
         if decision.intent in ("knowledge", "recommendation") and not tool_results:
             from service.assistant_models import AssistantParsedQuery
@@ -243,7 +251,6 @@ class AssistantService:
             retriever = self.retriever_cls(self.session)
             candidates = retriever.retrieve(parsed)
 
-        # Step 7: Generate grounded response with tool results
         response = self.grounded_responder.respond(
             intent=decision.intent,
             user_message=request.message,

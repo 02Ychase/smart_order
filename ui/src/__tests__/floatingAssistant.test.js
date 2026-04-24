@@ -126,4 +126,48 @@ describe('FloatingAssistant', () => {
     expect(wrapper.text()).toContain('匹配川菜偏好')
     expect(wrapper.text()).toContain('鱼香肉丝｜兰姨小炒')
   })
+
+  test('renders pending action confirmation', async () => {
+    chatWithAssistant.mockResolvedValueOnce({
+      session_id: 's1',
+      message: '是否加入购物车？',
+      response_type: 'confirmation_required',
+      recommendations: [],
+      comparisons: [],
+      citations: [],
+      suggested_actions: [],
+      pending_action: {
+        action_id: 'pa_1',
+        type: 'cart_add',
+        summary: '将 1 道菜加入购物车',
+        items: [{ dish_id: 11, quantity: 1 }],
+      },
+      executed_actions: [],
+    })
+
+    const wrapper = mount(FloatingAssistant, {
+      global: {
+        stubs: {
+          'el-input': {
+            props: ['modelValue'],
+            emits: ['update:modelValue'],
+            template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+          },
+          'el-button': {
+            emits: ['click'],
+            template: '<button @click="$emit(\'click\')"><slot /></button>',
+          },
+          'el-tag': { template: '<span><slot /></span>' },
+          'el-scrollbar': { template: '<div><slot /></div>' },
+        },
+      },
+    })
+
+    await wrapper.find('input').setValue('推荐川菜并加入购物车')
+    await wrapper.find('button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('待确认操作')
+    expect(wrapper.text()).toContain('将 1 道菜加入购物车')
+  })
 })

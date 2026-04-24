@@ -66,6 +66,22 @@
         </div>
       </div>
 
+      <div v-if="pendingAction" class="assistant-section">
+        <div class="assistant-section-title">待确认操作</div>
+        <div class="assistant-card">
+          <div class="assistant-card-title">{{ pendingAction.summary }}</div>
+          <div class="assistant-card-body">回复“确认”执行，或回复“取消”放弃。</div>
+        </div>
+      </div>
+
+      <div v-if="executedActions.length" class="assistant-section">
+        <div class="assistant-section-title">已完成操作</div>
+        <div v-for="item in executedActions" :key="`${item.type}-${item.message}`" class="assistant-card">
+          <div class="assistant-card-title">{{ item.message }}</div>
+          <div class="assistant-card-body">{{ item.success ? '操作成功' : '操作失败' }}</div>
+        </div>
+      </div>
+
       <div v-if="suggestedActions.length" class="assistant-section">
         <div class="assistant-section-title">建议操作</div>
         <div class="assistant-tags">
@@ -97,6 +113,8 @@ const {
   comparisons,
   citations,
   suggestedActions,
+  pendingAction,
+  executedActions,
   submit,
 } = useAssistant()
 </script>

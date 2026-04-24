@@ -20,6 +20,8 @@ export function useAssistant() {
   const comparisons = ref([])
   const citations = ref([])
   const suggestedActions = ref([])
+  const pendingAction = ref(null)
+  const executedActions = ref([])
 
   const { currentUser } = useAuth()
 
@@ -41,6 +43,8 @@ export function useAssistant() {
     comparisons.value = []
     citations.value = []
     suggestedActions.value = []
+    pendingAction.value = null
+    executedActions.value = []
 
     try {
       const payload = {
@@ -68,6 +72,8 @@ export function useAssistant() {
       comparisons.value = response.comparisons || []
       citations.value = response.citations || []
       suggestedActions.value = response.suggested_actions || []
+      pendingAction.value = response.pending_action || null
+      executedActions.value = response.executed_actions || []
     } catch (error) {
       errorMessage.value = error?.message || '智能助手暂时不可用，请稍后再试'
     } finally {
@@ -86,6 +92,8 @@ export function useAssistant() {
     comparisons,
     citations,
     suggestedActions,
+    pendingAction,
+    executedActions,
     submit,
   }
 }

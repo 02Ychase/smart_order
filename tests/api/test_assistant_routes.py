@@ -104,6 +104,43 @@ def test_assistant_chat_returns_structured_payload(assistant_test_context, monke
     assert payload["suggested_actions"] == ["查看商户", "加入购物车"]
 
 
+def test_assistant_chat_can_return_pending_action(assistant_test_context, monkeypatch) -> None:
+    client, assistant_routes = assistant_test_context
+
+    class PendingActionAssistantService:
+        def __init__(self, session):
+            pass
+
+        def chat(self, request):
+            return {
+                "session_id": request.session_id or "s1",
+                "message": "是否加入购物车？",
+                "response_type": "confirmation_required",
+                "needs_clarification": False,
+                "clarification_question": None,
+                "extracted_constraints": None,
+                "recommendations": [],
+                "comparisons": [],
+                "citations": [],
+                "suggested_actions": [],
+                "pending_action": {
+                    "action_id": "pa_1",
+                    "type": "cart_add",
+                    "summary": "加入 1 道菜",
+                    "items": [{"dish_id": 11, "quantity": 1}],
+                },
+                "executed_actions": [],
+            }
+
+    monkeypatch.setattr(assistant_routes, "AssistantService", PendingActionAssistantService)
+
+    response = client.post("/assistant/chat", json={"message": "确认加购"})
+
+    assert response.status_code == 200
+    assert response.json()["response_type"] == "confirmation_required"
+    assert response.json()["pending_action"]["action_id"] == "pa_1"
+
+
 def test_assistant_health_reports_dependency_flags(assistant_test_context, monkeypatch) -> None:
     client, assistant_routes = assistant_test_context
     expected_payload = {

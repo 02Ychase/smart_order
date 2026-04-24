@@ -55,13 +55,20 @@ npm run build
 npm run preview
 ```
 
-## API对接
+## API 对接
 
-前端通过以下接口与后端通信：
+前端通过 `/api` 代理访问后端：
 
-1. **智能对话**: `POST /api/chat`
-2. **配送查询**: `POST /api/delivery`  
-3. **菜品列表**: `GET /api/menu/list`
+- `POST /api/auth/login`
+- `POST /api/auth/register`
+- `GET /api/catalog/merchants`
+- `GET /api/catalog/merchants/{merchant_id}/dishes`
+- `GET /api/cart`
+- `POST /api/cart/items`
+- `GET /api/addresses`
+- `POST /api/addresses`
+- `POST /api/assistant/chat`
+- `GET /api/assistant/health`
 
 ## 代理配置
 

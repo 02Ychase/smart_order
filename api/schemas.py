@@ -220,10 +220,24 @@ class AssistantCitationResponse(BaseModel):
     snippet: str
 
 
+class AssistantPendingActionResponse(BaseModel):
+    action_id: str
+    type: Literal["cart_add", "address_save"]
+    summary: str
+    items: list[dict] = Field(default_factory=list)
+
+
+class AssistantExecutedActionResponse(BaseModel):
+    type: str
+    success: bool
+    message: str
+    data: dict = Field(default_factory=dict)
+
+
 class AssistantChatResponse(BaseModel):
     session_id: str
     message: str
-    response_type: Literal["greeting", "clarification", "action_pending", "action_completed", "recommendation", "comparison", "knowledge", "unsupported"] = "recommendation"
+    response_type: Literal["greeting", "clarification", "confirmation_required", "action_pending", "action_completed", "recommendation", "comparison", "knowledge", "unsupported"] = "recommendation"
     needs_clarification: bool = False
     clarification_question: str | None = None
     extracted_constraints: AssistantConstraintResponse | None = None
@@ -231,6 +245,8 @@ class AssistantChatResponse(BaseModel):
     comparisons: list[AssistantComparisonResponse] = Field(default_factory=list)
     citations: list[AssistantCitationResponse] = Field(default_factory=list)
     suggested_actions: list[str] = Field(default_factory=list)
+    pending_action: AssistantPendingActionResponse | None = None
+    executed_actions: list[AssistantExecutedActionResponse] = Field(default_factory=list)
 
 
 class AssistantHealthResponse(BaseModel):
