@@ -22,3 +22,10 @@ cd ui
 npm install
 npm run dev
 ```
+
+
+
+uvicorn api.main:app --host 127.0.0.1 --port 8000 --no-access-log
+
+
+ npm --prefix ui run dev

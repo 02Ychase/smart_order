@@ -47,6 +47,7 @@ class GroundedResponder:
         constraints: ResolvedConstraints | None,
         evidence: list[AssistantCandidate],
         session_context: list[dict],
+        tool_results: list[dict] | None = None,
     ) -> dict:
         if intent == "greeting":
             return {

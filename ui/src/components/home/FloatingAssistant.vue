@@ -107,6 +107,7 @@ const {
   right: 32px;
   bottom: 24px;
   width: 380px;
+  height: 640px;
   max-height: calc(100vh - 48px);
   display: flex;
   flex-direction: column;
@@ -131,7 +132,9 @@ const {
 }
 
 .assistant-scroll {
-  max-height: 520px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .assistant-message-row {

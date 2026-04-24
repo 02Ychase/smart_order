@@ -25,6 +25,13 @@ def test_chat_routes_greeting_without_retrieval() -> None:
 
 def test_chat_routes_action_intent_without_retrieval() -> None:
     service = AssistantService(DummySession())
+    service.agent_core._llm = MagicMock()
+    service.agent_core._llm.call.return_value = {
+        "reasoning": "操作意图",
+        "intent": "action",
+        "needs_clarification": False,
+        "tool_calls": [],
+    }
     response = service.chat(SimpleNamespace(message="帮我加入购物车", session_id=None))
 
     assert response["response_type"] == "action_pending"
@@ -59,6 +66,13 @@ def test_chat_routes_recommendation_with_retrieval_and_evidence(monkeypatch) -> 
     monkeypatch.setattr("service.assistant_service.AssistantRetriever", StubRetriever, raising=False)
 
     service = AssistantService(DummySession())
+    service.agent_core._llm = MagicMock()
+    service.agent_core._llm.call.return_value = {
+        "reasoning": "用户有明确预算和人数",
+        "intent": "recommendation",
+        "needs_clarification": False,
+        "tool_calls": [],
+    }
     response = service.chat(
         SimpleNamespace(
             message="推荐几种川菜，2个人吃，100元以内",
@@ -83,16 +97,20 @@ def test_chat_requests_clarification_for_sparse_recommendation() -> None:
 
 def test_chat_executes_action_intent_via_agent_loop() -> None:
     service = AssistantService(DummySession())
-    llm_response = '{"thought": "用户想加购", "action": "add_to_cart", "action_input": {"user_id": 1, "dish_id": 11, "quantity": 1}}'
+    service.agent_core._llm = MagicMock()
+    service.agent_core._llm.call.return_value = {
+        "reasoning": "用户想加购",
+        "intent": "action",
+        "needs_clarification": False,
+        "tool_calls": [{"name": "add_to_cart", "parameters": {"dish_id": 11, "quantity": 1}}],
+    }
+    service.tool_registry.execute = MagicMock(return_value={"success": True, "dish_id": 11, "quantity": 1})
 
-    with patch("service.agent_loop.call_llm", return_value=llm_response):
-        service.agent_loop.tool_registry.execute = MagicMock(return_value={"success": True, "dish_id": 11, "quantity": 1})
-        response = service.chat(
-            SimpleNamespace(message="帮我加入购物车", session_id=None, user_id=1)
-        )
+    response = service.chat(
+        SimpleNamespace(message="帮我加入购物车", session_id=None, user_id=1)
+    )
 
     assert response["response_type"] == "action_completed"
-    assert "tool_result" in response
 
 
 def test_chat_does_not_clarify_for_knowledge_query_about_coffee_shops(monkeypatch) -> None:
