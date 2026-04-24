@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass
@@ -6,6 +7,8 @@ class ToolSchema:
     name: str
     description: str
     parameters: dict
+    side_effect: Literal["none", "pending_write", "direct_write"] = "none"
+    requires_confirmation: bool = False
 
 
 class ToolRegistry:

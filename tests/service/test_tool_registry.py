@@ -46,6 +46,25 @@ def test_registry_raises_on_unknown_tool() -> None:
         assert "missing" in str(e)
 
 
+def test_registry_schema_tracks_side_effect_and_confirmation_policy() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        ToolSchema(
+            name="prepare_cart_action",
+            description="Prepare cart action",
+            parameters={"type": "object"},
+            side_effect="pending_write",
+            requires_confirmation=True,
+        ),
+        lambda **kwargs: {"ok": True},
+    )
+
+    schema = registry.list_schemas()[0]
+
+    assert schema.side_effect == "pending_write"
+    assert schema.requires_confirmation is True
+
+
 def test_add_to_cart_tool_executes() -> None:
     from service.tools.cart_tool import add_to_cart_tool
 
