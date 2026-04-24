@@ -30,6 +30,19 @@ def test_tool_result_success_contract() -> None:
     assert result.evidence[0].source_id == 11
 
 
+def test_tool_result_error_contract() -> None:
+    result = ToolResult.error_result(
+        tool_name="search_catalog",
+        code="AMBIGUOUS_DISH",
+        message="找到了多个同名菜品",
+        candidates=[{"dish_id": 11}, {"dish_id": 12}],
+    )
+
+    assert result.ok is False
+    assert result.error.code == "AMBIGUOUS_DISH"
+    assert result.error.candidates == [{"dish_id": 11}, {"dish_id": 12}]
+
+
 def test_pending_action_expires_and_serializes_items() -> None:
     action = PendingAction(
         action_type="cart_add",

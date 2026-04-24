@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from secrets import token_hex
 from typing import Any, Literal
+from uuid import uuid4
 
 
 IntentType = Literal[
@@ -32,7 +32,7 @@ def _utc_now() -> datetime:
 
 
 def _pending_action_id() -> str:
-    return f"pa_{token_hex(6)}"
+    return f"pa_{uuid4().hex[:12]}"
 
 
 @dataclass
@@ -54,9 +54,9 @@ class AgentDecision:
 
 @dataclass
 class EvidencePack:
-    source_type: str
-    source_id: str | int
-    merchant_id: str | int
+    source_type: Literal["dish", "merchant"]
+    source_id: int
+    merchant_id: int
     title: str
     facts: dict[str, Any]
     why_matched: list[str] = field(default_factory=list)
@@ -68,7 +68,7 @@ class EvidencePack:
 class ToolError:
     code: str
     message: str
-    candidates: list[Any] = field(default_factory=list)
+    candidates: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -83,6 +83,7 @@ class ToolResult:
     @classmethod
     def ok_result(
         cls,
+        *,
         tool_name: str,
         data: dict[str, Any] | None = None,
         evidence: list[EvidencePack] | None = None,
@@ -100,25 +101,22 @@ class ToolResult:
     @classmethod
     def error_result(
         cls,
+        *,
         tool_name: str,
-        error: ToolError,
-        data: dict[str, Any] | None = None,
-        evidence: list[EvidencePack] | None = None,
-        requires_confirmation: bool = False,
+        code: str,
+        message: str,
+        candidates: list[dict[str, Any]] | None = None,
     ) -> "ToolResult":
         return cls(
             ok=False,
             tool_name=tool_name,
-            data=data or {},
-            evidence=evidence or [],
-            requires_confirmation=requires_confirmation,
-            error=error,
+            error=ToolError(code=code, message=message, candidates=candidates or []),
         )
 
 
 @dataclass
 class PendingAction:
-    action_type: str
+    action_type: Literal["cart_add", "address_save"]
     summary: str
     payload: dict[str, Any]
     requires_user_id: bool
@@ -138,8 +136,8 @@ class PendingAction:
 @dataclass
 class AssistantTurnState:
     session_id: str
-    user_id: str | int | None = None
+    user_id: int | None = None
     last_intent: IntentType | None = None
     slots: dict[str, Any] = field(default_factory=dict)
-    last_evidence_ids: list[str | int] = field(default_factory=list)
+    last_evidence_ids: list[str] = field(default_factory=list)
     pending_action: PendingAction | None = None
