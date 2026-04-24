@@ -9,7 +9,7 @@
       <div v-for="(message, index) in messages" :key="`${message.role}-${index}`" class="assistant-message-row" :class="`assistant-message-row--${message.role}`">
         <div class="assistant-avatar">{{ message.role === 'assistant' ? 'AI' : '我' }}</div>
         <div class="assistant-bubble">
-          <p>{{ message.text }}</p>
+          <p class="assistant-message-text">{{ message.text }}</p>
         </div>
       </div>
 
@@ -188,6 +188,10 @@ const {
 
 .assistant-bubble p {
   margin: 0;
+}
+
+.assistant-message-text {
+  white-space: pre-line;
 }
 
 .assistant-section {

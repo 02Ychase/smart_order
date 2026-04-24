@@ -329,7 +329,7 @@ class AssistantOrchestrator:
             }
             for item in evidence
         ]
-        message = "我根据你的需求找到了这些结果。"
+        message = self._build_grounded_message(evidence, response_type)
         if pending_action:
             message = f"{message} {pending_action.summary}，是否确认？"
         return {
@@ -338,6 +338,32 @@ class AssistantOrchestrator:
             "citations": citations,
             "pending_action": self._serialize_pending_action(pending_action),
         }
+
+    def _build_grounded_message(self, evidence: list[EvidencePack], response_type: str) -> str:
+        if not evidence:
+            return "我没有找到足够匹配的结果，可以换个口味、菜系或预算范围再试。"
+
+        lines = []
+        for index, item in enumerate(evidence[:3], start=1):
+            if item.source_type == "dish":
+                dish_name = item.facts.get("dish_name", item.title)
+                merchant_name = item.facts.get("merchant_name", "")
+                price = item.facts.get("price")
+                reason = "、".join(item.why_matched) or item.citation
+                price_text = f"{float(price):.0f}元" if price is not None else "价格以商家为准"
+                lines.append(f"{index}. {dish_name}（{merchant_name}，{price_text}）：{reason}")
+            else:
+                merchant_name = item.facts.get("merchant_name", item.title)
+                hours = item.facts.get("business_hours")
+                reason = "、".join(item.why_matched) or item.citation
+                hours_text = f"，营业时间 {hours}" if hours else ""
+                lines.append(f"{index}. {merchant_name}{hours_text}：{reason}")
+
+        if response_type == "knowledge":
+            prefix = "根据商家和菜品库检索到的信息，我建议你优先看："
+        else:
+            prefix = "结合商家数据、菜品价格和匹配理由，我推荐："
+        return f"{prefix}\n" + "\n".join(lines)
 
     def _base_response(
         self,

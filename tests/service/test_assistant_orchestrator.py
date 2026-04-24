@@ -236,3 +236,34 @@ def test_orchestrator_does_not_parse_party_size_as_budget() -> None:
 
     assert slots["party_size"] == 3
     assert "budget_max" not in slots
+
+
+def test_orchestrator_message_summarizes_rag_evidence_for_recommendations() -> None:
+    evidence = [
+        EvidencePack(
+            source_type="dish",
+            source_id=31,
+            merchant_id=3,
+            title="水煮牛肉｜川湘小馆",
+            facts={"dish_id": 31, "dish_name": "水煮牛肉", "merchant_name": "川湘小馆", "price": 88.0},
+            why_matched=["川菜", "高价优先"],
+            citation="川味麻辣；88元",
+        ),
+        EvidencePack(
+            source_type="dish",
+            source_id=32,
+            merchant_id=3,
+            title="藤椒冒菜｜川湘小馆",
+            facts={"dish_id": 32, "dish_name": "藤椒冒菜", "merchant_name": "川湘小馆", "price": 68.0},
+            why_matched=["川菜", "麻辣口味"],
+            citation="清麻鲜辣；68元",
+        ),
+    ]
+    orchestrator = AssistantOrchestrator(session=None)
+
+    response = orchestrator._recommendation_response("s1", evidence, response_type="recommendation")
+
+    assert "水煮牛肉" in response["message"]
+    assert "川湘小馆" in response["message"]
+    assert "88元" in response["message"]
+    assert "川菜" in response["message"]

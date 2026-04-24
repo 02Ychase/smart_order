@@ -65,7 +65,7 @@ describe('FloatingAssistant', () => {
   test('renders recommendation cards and citations from the assistant response', async () => {
     chatWithAssistant.mockResolvedValueOnce({
       session_id: 'session-1',
-      message: '我根据你提供的条件整理了更匹配的选项。',
+      message: '结合商家数据、菜品价格和匹配理由，我推荐：\n1. 鱼香肉丝（兰姨小炒，28元）：匹配川菜偏好',
       needs_clarification: false,
       clarification_question: null,
       extracted_constraints: {
@@ -125,6 +125,7 @@ describe('FloatingAssistant', () => {
     expect(wrapper.text()).toContain('兰姨小炒')
     expect(wrapper.text()).toContain('匹配川菜偏好')
     expect(wrapper.text()).toContain('鱼香肉丝｜兰姨小炒')
+    expect(wrapper.find('.assistant-bubble p').classes()).toContain('assistant-message-text')
   })
 
   test('renders pending action confirmation', async () => {
