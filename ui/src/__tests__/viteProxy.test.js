@@ -7,6 +7,14 @@ const loadConfig = async () => {
 }
 
 describe('vite proxy config', () => {
+  test('defaults api proxy target to backend dev server port', async () => {
+    vi.unstubAllEnvs()
+
+    const { default: config } = await loadConfig()
+
+    expect(config.server.proxy['/api'].target).toBe('http://127.0.0.1:8000')
+  })
+
   test('uses VITE_API_TARGET override for the api proxy target', async () => {
     vi.stubEnv('VITE_API_TARGET', 'http://127.0.0.1:8001')
 
