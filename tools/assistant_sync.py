@@ -28,13 +28,25 @@ from tools.assistant_vector_store import AssistantVectorStore
 
 def _build_dish_text(dish: dict, merchant: dict) -> str:
     """构建菜品语义文本描述，用于生成嵌入向量。"""
+    allergens = dish["allergens"] if dish["allergens"] else ["无显式过敏原"]
+    scenario_terms = []
+    if "下饭" in dish["description"] or "辣" in dish["flavor_profile"]:
+        scenario_terms.append("工作餐")
+        scenario_terms.append("米饭搭配")
+    if dish["price"] <= 35:
+        scenario_terms.append("单人简餐")
+    if not scenario_terms:
+        scenario_terms.append("日常点餐")
+
     parts = [
         f"菜品:{dish['name']}",
         f"商家:{merchant['name']}",
         f"菜系:{dish['cuisine_type'] or '其他'}",
         f"口味:{dish['flavor_profile'] or '未知'}",
         f"价格:{dish['price']:.0f}元",
+        f"适合场景:{','.join(scenario_terms)}",
         f"食材:{','.join(dish['ingredients']) if dish['ingredients'] else '未注明'}",
+        f"过敏原:{','.join(allergens)}",
         f"特色:{dish['description'][:50] if dish['description'] else '无描述'}",
         f"烹饪方式:{dish['cooking_method'] or '未知'}",
     ]
