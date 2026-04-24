@@ -4,7 +4,11 @@ from service.tools.recommendation_tool import recommend_dishes_tool
 
 
 class StubRagRetriever:
+    def __init__(self):
+        self.last_message = None
+
     def retrieve(self, message, limit=5):
+        self.last_message = message
         return [
             EvidencePack(
                 source_type="dish",
@@ -36,6 +40,38 @@ def test_recommend_dishes_tool_returns_evidence_and_cart_candidates() -> None:
     assert result.ok is True
     assert result.data["cart_candidate_items"] == [{"dish_id": 11, "quantity": 1}]
     assert result.evidence[0].source_id == 11
+
+
+def test_recommend_dishes_tool_accepts_planner_argument_aliases() -> None:
+    retriever = StubRagRetriever()
+
+    result = recommend_dishes_tool(
+        query="推荐几个菜",
+        cuisine="川菜",
+        budget_max=100,
+        party_size=3,
+        _retriever=retriever,
+    )
+
+    assert result.ok is True
+    assert "川菜" in retriever.last_message
+    assert "100元以内" in retriever.last_message
+    assert "3个人" in retriever.last_message
+
+
+def test_recommend_dishes_tool_builds_query_from_structured_arguments() -> None:
+    retriever = StubRagRetriever()
+
+    result = recommend_dishes_tool(
+        cuisine="川菜",
+        budget_max=100,
+        party_size=3,
+        _retriever=retriever,
+    )
+
+    assert result.ok is True
+    assert "川菜" in retriever.last_message
+    assert "100元以内" in retriever.last_message
 
 
 def test_search_catalog_tool_returns_evidence() -> None:
