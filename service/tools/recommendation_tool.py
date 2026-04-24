@@ -13,6 +13,7 @@ def recommend_dishes_tool(
     cuisine_type: str | None = None,
     preferences: str | None = None,
     exclude_allergens: list[str] | None = None,
+    premium: bool = False,
     limit: int = 3,
     session=None,
     _retriever=None,
@@ -34,6 +35,13 @@ def recommend_dishes_tool(
         message_parts.append(f"不要{allergen}")
 
     evidence = retriever.retrieve("，".join(message_parts), limit=limit)
+    premium_requested = premium or any(term in "，".join(message_parts) for term in ("比较贵", "越贵越好", "无预算", "无上限"))
+    if premium_requested:
+        evidence = sorted(
+            evidence,
+            key=lambda item: float(item.facts.get("price") or 0),
+            reverse=True,
+        )
     cart_items = [
         {"dish_id": item.source_id, "quantity": 1}
         for item in evidence

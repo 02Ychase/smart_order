@@ -28,6 +28,32 @@ class StubRagRetriever:
         ]
 
 
+class PriceSortedStubRagRetriever:
+    def retrieve(self, message, limit=5):
+        return [
+            EvidencePack(
+                source_type="dish",
+                source_id=21,
+                merchant_id=2,
+                title="回锅肉｜川湘小馆",
+                facts={"dish_id": 21, "dish_name": "回锅肉", "merchant_name": "川湘小馆", "price": 38.0},
+                why_matched=["川菜"],
+                citation="川味家常；38元",
+                score=0.88,
+            ),
+            EvidencePack(
+                source_type="dish",
+                source_id=31,
+                merchant_id=3,
+                title="水煮牛肉｜川湘小馆",
+                facts={"dish_id": 31, "dish_name": "水煮牛肉", "merchant_name": "川湘小馆", "price": 88.0},
+                why_matched=["川菜"],
+                citation="川味麻辣；88元",
+                score=0.86,
+            ),
+        ]
+
+
 def test_recommend_dishes_tool_returns_evidence_and_cart_candidates() -> None:
     result = recommend_dishes_tool(
         query="川菜 下饭",
@@ -72,6 +98,16 @@ def test_recommend_dishes_tool_builds_query_from_structured_arguments() -> None:
     assert result.ok is True
     assert "川菜" in retriever.last_message
     assert "100元以内" in retriever.last_message
+
+
+def test_recommend_dishes_tool_prioritizes_price_when_premium_requested() -> None:
+    result = recommend_dishes_tool(
+        query="川菜 越贵越好",
+        premium=True,
+        _retriever=PriceSortedStubRagRetriever(),
+    )
+
+    assert result.evidence[0].facts["dish_name"] == "水煮牛肉"
 
 
 def test_search_catalog_tool_returns_evidence() -> None:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+from typing import Any
+
 from service.agent_planner import AgentPlanner
 from service.agent_state import EvidencePack, PendingAction, ToolResult
 from service.assistant_session_store import InMemoryAssistantSessionStore
@@ -10,6 +13,12 @@ from service.tools.address_tool import commit_address_action_tool, parse_address
 from service.tools.cart_tool import commit_cart_action_tool
 from service.tools.catalog_tool import search_catalog_tool
 from service.tools.recommendation_tool import recommend_dishes_tool
+
+
+CUISINE_TERMS = ("川菜", "湘菜", "粤菜", "轻食", "咖啡甜品", "麻辣烫", "披萨意面")
+PARTY_SIZE_PATTERN = re.compile(r"(\d+)\s*(?:个人|人|位)")
+BUDGET_PATTERN = re.compile(r"(?:预算|人均)\s*(\d+(?:\.\d+)?)\s*(?:元|块)?|(\d+(?:\.\d+)?)\s*(?:元|块)")
+PREMIUM_TERMS = ("比较贵", "贵一点", "偏贵", "高端", "越贵越好", "无预算", "无上限", "不限预算", "预算不限")
 
 
 class AssistantOrchestrator:
@@ -55,10 +64,20 @@ class AssistantOrchestrator:
 
     def chat(self, *, message: str, session_id: str | None, user_id: int | None = None) -> dict:
         state = self.session_store.get_or_create(session_id, user_id=user_id)
+        extracted_slots = self._extract_recommendation_slots(message)
+        if extracted_slots:
+            self.session_store.update_agent_state(
+                session_id=state.session_id,
+                user_id=user_id,
+                slots=extracted_slots,
+            )
 
         pending = self.confirmation_manager.consume_pending_action(state, message)
         if pending is not None:
             return self._commit_pending_action(state.session_id, user_id, pending)
+
+        if self._should_run_recommendation_directly(state, message):
+            return self._run_recommendation_from_state(state, message)
 
         decision = self.planner.plan(
             message,
@@ -68,6 +87,9 @@ class AssistantOrchestrator:
             },
         )
 
+        if decision.intent == "unsupported" and self._is_recommendation_followup(state, message):
+            return self._run_recommendation_from_state(state, message)
+
         if decision.intent == "greeting":
             return self._base_response(state.session_id, "你好！我是你的智能点餐助手。", "greeting")
 
@@ -75,6 +97,13 @@ class AssistantOrchestrator:
             return self._base_response(state.session_id, "抱歉，我暂时还无法处理这个请求。", "unsupported")
 
         if decision.missing_slots:
+            if decision.intent == "recommendation" and self._can_recommend_without_more_clarification(state):
+                return self._run_recommendation_from_state(state, message)
+            self.session_store.update_agent_state(
+                session_id=state.session_id,
+                user_id=user_id,
+                last_intent=decision.intent,
+            )
             return self._base_response(
                 state.session_id,
                 decision.clarification_question or "请补充预算、人数或口味偏好。",
@@ -86,6 +115,8 @@ class AssistantOrchestrator:
         tool_results = []
         evidence: list[EvidencePack] = []
         for call in decision.tool_plan:
+            if call.tool_name == "recommend_dishes":
+                call.arguments = self._merge_recommendation_arguments(call.arguments, state, message)
             result = self.tool_registry.execute(call.tool_name, call.arguments)
             tool_results.append(result)
             if isinstance(result, ToolResult):
@@ -130,6 +161,12 @@ class AssistantOrchestrator:
             )
 
         if decision.intent in {"recommendation", "knowledge"}:
+            self.session_store.update_agent_state(
+                session_id=state.session_id,
+                user_id=user_id,
+                last_intent=decision.intent,
+                last_evidence_ids=[f"{item.source_type}_{item.source_id}" for item in evidence],
+            )
             return self._recommendation_response(
                 state.session_id,
                 evidence,
@@ -137,6 +174,96 @@ class AssistantOrchestrator:
             )
 
         return self._base_response(state.session_id, "我已理解你的请求，请补充更多细节。", "clarification")
+
+    def _extract_recommendation_slots(self, message: str) -> dict[str, Any]:
+        slots: dict[str, Any] = {}
+        for cuisine in CUISINE_TERMS:
+            if cuisine in message:
+                slots["cuisine"] = cuisine
+                break
+
+        party_match = PARTY_SIZE_PATTERN.search(message)
+        if party_match:
+            slots["party_size"] = int(party_match.group(1))
+
+        if any(term in message for term in PREMIUM_TERMS):
+            slots["premium_preference"] = True
+        if any(term in message for term in ("无预算", "无上限", "不限预算", "预算不限")):
+            slots["budget_open_ended"] = True
+
+        budget_match = BUDGET_PATTERN.search(message)
+        if budget_match and not slots.get("budget_open_ended"):
+            slots["budget_max"] = float(budget_match.group(1) or budget_match.group(2))
+
+        return slots
+
+    def _can_recommend_without_more_clarification(self, state) -> bool:
+        return bool(state.slots.get("premium_preference") or state.slots.get("budget_open_ended"))
+
+    def _is_recommendation_followup(self, state, message: str) -> bool:
+        if state.last_intent != "recommendation":
+            return False
+        followup_terms = ("无预算", "无上限", "越贵越好", "不限", "预算不限", "人均", "个人", "人", "位")
+        return any(term in message for term in followup_terms)
+
+    def _should_run_recommendation_directly(self, state, message: str) -> bool:
+        if self._is_recommendation_followup(state, message):
+            return True
+        if "推荐" not in message and "吃什么" not in message:
+            return False
+        return bool(state.slots.get("premium_preference") or state.slots.get("budget_open_ended"))
+
+    def _run_recommendation_from_state(self, state, message: str) -> dict:
+        slots = state.slots
+        query_parts = []
+        if slots.get("cuisine"):
+            query_parts.append(str(slots["cuisine"]))
+        if slots.get("premium_preference") or slots.get("budget_open_ended"):
+            query_parts.append("比较贵 越贵越好")
+        query_parts.append(message)
+
+        result = self.tool_registry.execute(
+            "recommend_dishes",
+            {
+                "query": " ".join(part for part in query_parts if part),
+                "cuisine": slots.get("cuisine"),
+                "budget_max": slots.get("budget_max"),
+                "party_size": slots.get("party_size"),
+                "premium": bool(slots.get("premium_preference") or slots.get("budget_open_ended")),
+            },
+        )
+        evidence = result.evidence if isinstance(result, ToolResult) else []
+        self.session_store.update_agent_state(
+            session_id=state.session_id,
+            last_intent="recommendation",
+            last_evidence_ids=[f"{item.source_type}_{item.source_id}" for item in evidence],
+        )
+        return self._recommendation_response(state.session_id, evidence, response_type="recommendation")
+
+    def _merge_recommendation_arguments(self, arguments: dict, state, message: str) -> dict:
+        merged = dict(arguments)
+        slots = state.slots
+        if slots.get("cuisine") and not merged.get("cuisine") and not merged.get("cuisine_type"):
+            merged["cuisine"] = slots["cuisine"]
+        if slots.get("budget_max") is not None and merged.get("budget_max") is None and merged.get("budget") is None:
+            merged["budget_max"] = slots["budget_max"]
+        if slots.get("party_size") and not merged.get("party_size"):
+            merged["party_size"] = slots["party_size"]
+
+        premium = bool(slots.get("premium_preference") or slots.get("budget_open_ended"))
+        if premium:
+            merged["premium"] = True
+
+        query_parts = []
+        if merged.get("query"):
+            query_parts.append(str(merged["query"]))
+        if slots.get("cuisine"):
+            query_parts.append(str(slots["cuisine"]))
+        if premium:
+            query_parts.append("比较贵 越贵越好")
+        query_parts.append(message)
+        merged["query"] = " ".join(part for part in query_parts if part).strip()
+        return merged
 
     def _commit_pending_action(self, session_id: str, user_id: int | None, pending: PendingAction) -> dict:
         if pending.requires_user_id and user_id is None:
