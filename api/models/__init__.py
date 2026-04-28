@@ -4,6 +4,7 @@ from api.models.cart import Cart, CartItem
 from api.models.catalog import Dish, DishCategory, Merchant
 from api.models.order import CheckoutOrder, DeliveryQuote, MerchantOrder, OrderItem, PaymentRecord
 from api.models.user import User, UserAddress
+from api.models.user_memory import UserMemory
 
 __all__ = [
     "Base",
@@ -20,4 +21,5 @@ __all__ = [
     "PaymentRecord",
     "DeliveryQuote",
     "ActionJournal",
+    "UserMemory",
 ]

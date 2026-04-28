@@ -15,6 +15,7 @@ EXPECTED_TABLES = {
     "payment_records",
     "delivery_quotes",
     "action_journal",
+    "user_memories",
 }
 
 
