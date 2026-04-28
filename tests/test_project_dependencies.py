@@ -8,6 +8,7 @@ REQUIRED_REQUIREMENTS = {
     "python-jose[cryptography]>=3.3.0",
     "pytest>=8.2.0",
     "httpx>=0.27.0",
+    "langgraph>=1.0.0",
 }
 
 
@@ -18,6 +19,7 @@ REQUIRED_PYPROJECT = {
     "python-jose[cryptography]>=3.3.0",
     "pytest>=8.2.0",
     "httpx>=0.27.0",
+    "langgraph>=1.0.0",
 }
 
 
