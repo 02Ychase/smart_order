@@ -1,4 +1,5 @@
 from service.agent_state import EvidencePack
+from service.rag.models import RagEvidence
 from service.tools.catalog_tool import search_catalog_tool
 from service.tools.recommendation_tool import recommend_dishes_tool
 
@@ -51,6 +52,38 @@ class PriceSortedStubRagRetriever:
                 citation="川味麻辣；88元",
                 score=0.86,
             ),
+        ]
+
+
+class AdvancedStubRagRetriever:
+    def __init__(self):
+        self.last_query = None
+        self.last_agent_plan = None
+        self.last_memories = None
+        self.last_limit = None
+
+    def retrieve(self, original_query, agent_plan, memories=None, limit=5):
+        self.last_query = original_query
+        self.last_agent_plan = agent_plan
+        self.last_memories = memories
+        self.last_limit = limit
+        return [
+            RagEvidence(
+                source_type="dish",
+                source_id=11,
+                merchant_id=1,
+                title="小炒黄牛肉｜兰姨小炒",
+                facts={
+                    "dish_id": 11,
+                    "dish_name": "小炒黄牛肉",
+                    "merchant_name": "兰姨小炒",
+                    "price": 42.0,
+                    "cuisine_type": "湘菜",
+                },
+                why_matched=["湘菜", "鲜辣下饭"],
+                citation="黄牛肉片现炒，芹菜和小米椒提香提辣。",
+                score=0.88,
+            )
         ]
 
 
@@ -110,8 +143,40 @@ def test_recommend_dishes_tool_prioritizes_price_when_premium_requested() -> Non
     assert result.evidence[0].facts["dish_name"] == "水煮牛肉"
 
 
+def test_recommend_dishes_tool_uses_advanced_retriever_agent_plan() -> None:
+    retriever = AdvancedStubRagRetriever()
+
+    result = recommend_dishes_tool(
+        query="推荐几个辣的湘菜",
+        cuisine="湘菜",
+        preferences="辣",
+        _retriever=retriever,
+        limit=2,
+    )
+
+    assert result.ok is True
+    assert result.evidence[0].title == "小炒黄牛肉｜兰姨小炒"
+    assert retriever.last_agent_plan.intent == "recommendation"
+    assert retriever.last_agent_plan.requires_rag is True
+    assert retriever.last_agent_plan.filters["cuisine_types"] == ["湘菜"]
+    assert retriever.last_agent_plan.filters["flavor_preferences"] == ["辣"]
+    assert retriever.last_limit == 2
+
+
 def test_search_catalog_tool_returns_evidence() -> None:
     result = search_catalog_tool(query="鱼香肉丝", _retriever=StubRagRetriever())
 
     assert result.ok is True
     assert result.evidence[0].title == "鱼香肉丝｜兰姨小炒"
+
+
+def test_search_catalog_tool_uses_advanced_retriever_agent_plan() -> None:
+    retriever = AdvancedStubRagRetriever()
+
+    result = search_catalog_tool(query="兰姨小炒营业时间", _retriever=retriever, limit=4)
+
+    assert result.ok is True
+    assert retriever.last_agent_plan.intent == "knowledge"
+    assert retriever.last_agent_plan.requires_rag is True
+    assert retriever.last_agent_plan.normalized_query == "兰姨小炒营业时间"
+    assert retriever.last_limit == 4

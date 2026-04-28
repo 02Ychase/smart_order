@@ -1,7 +1,23 @@
 from __future__ import annotations
 
-from service.agent_state import ToolResult
-from service.rag_retriever import RagRetriever
+from service.agent_runtime.state import AgentPlan
+from service.agent_state import EvidencePack, ToolResult
+from service.rag.retriever import AdvancedRagRetriever
+
+
+def _to_legacy_evidence(item):
+    if isinstance(item, EvidencePack):
+        return item
+    return EvidencePack(
+        source_type=item.source_type,
+        source_id=item.source_id,
+        merchant_id=item.merchant_id,
+        title=item.title,
+        facts=item.facts,
+        why_matched=item.why_matched,
+        citation=item.citation,
+        score=item.score,
+    )
 
 
 def recommend_dishes_tool(
@@ -19,7 +35,7 @@ def recommend_dishes_tool(
     _retriever=None,
     **_: object,
 ) -> ToolResult:
-    retriever = _retriever or RagRetriever(session=session)
+    retriever = _retriever or AdvancedRagRetriever(session=session)
     message_parts = [query] if query else []
     cuisine_value = cuisine or cuisine_type
     if cuisine_value:
@@ -34,7 +50,24 @@ def recommend_dishes_tool(
     for allergen in exclude_allergens or []:
         message_parts.append(f"不要{allergen}")
 
-    evidence = retriever.retrieve("，".join(message_parts), limit=limit)
+    full_message = "，".join(message_parts)
+    agent_plan = AgentPlan(
+        intent="recommendation",
+        normalized_query=full_message,
+        requires_rag=True,
+        filters={
+            "cuisine_types": [cuisine_value] if cuisine_value else [],
+            "flavor_preferences": [preferences] if preferences else [],
+            "budget_max": budget_value,
+            "party_size": party_size,
+            "exclude_allergens": exclude_allergens or [],
+        },
+    )
+    try:
+        rag_evidence = retriever.retrieve(full_message, agent_plan=agent_plan, memories=[], limit=int(limit or 3))
+    except TypeError:
+        rag_evidence = retriever.retrieve(full_message, limit=limit)
+    evidence = [_to_legacy_evidence(item) for item in rag_evidence]
     premium_requested = premium or any(term in "，".join(message_parts) for term in ("比较贵", "越贵越好", "无预算", "无上限"))
     if premium_requested:
         evidence = sorted(
