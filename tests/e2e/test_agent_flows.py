@@ -38,8 +38,8 @@ def test_knowledge_query_does_not_ask_for_clarification():
     assert response["needs_clarification"] is False
 
 
-def test_recommendation_without_constraints_asks_for_clarification():
-    """缺少约束的个性化推荐应要求澄清"""
+def test_recommendation_without_constraints_answers_directly():
+    """缺少预算人数时也应直接给出推荐路径，不主动追问"""
     service = AssistantService(MockSession())
 
     service.agent_core._llm = MagicMock()
@@ -56,8 +56,8 @@ def test_recommendation_without_constraints_asks_for_clarification():
 
     response = service.chat(request)
 
-    assert response["response_type"] == "clarification"
-    assert response["needs_clarification"] is True
+    assert response["response_type"] == "recommendation"
+    assert response["needs_clarification"] is False
 
 
 def test_greeting_returns_directly():
