@@ -1,8 +1,10 @@
 import os
 
+from langchain_core.messages import HumanMessage
 from sqlalchemy.orm import Session
 
 from api.schemas import AssistantChatRequest, AssistantChatResponse, AssistantHealthResponse
+from service.agent_runtime.graph import build_agent_graph
 from service.agent_core import AgentCore
 from service.agent_loop import AgentLoop
 from service.assistant_composer import compose_assistant_response
@@ -28,6 +30,7 @@ class AssistantService:
         self.grounded_responder = GroundedResponder()
         self.agent_loop = AgentLoop(session)
         self.agent_core = AgentCore()
+        self._graph = None
         self._setup_tool_registry()
 
     def _setup_tool_registry(self) -> None:
@@ -129,15 +132,25 @@ class AssistantService:
         if not isinstance(request, AssistantChatRequest):
             return self._legacy_chat(request)
 
-        orchestrator = AssistantOrchestrator(
-            session=self.session,
-            session_store=self.session_store,
+        session_id = request.session_id or self.session_store.get_or_create(
+            None,
+            user_id=request.user_id,
+        ).session_id
+        if self._graph is None:
+            self._graph = build_agent_graph()
+        result = self._graph.invoke(
+            {
+                "messages": [HumanMessage(content=request.message)],
+                "session_id": session_id,
+                "user_id": request.user_id,
+                "loaded_user_memories": [],
+                "recent_evidence": [],
+                "recent_action_ids": [],
+                "tool_results": [],
+            },
+            config={"configurable": {"thread_id": session_id}},
         )
-        return orchestrator.chat(
-            message=request.message,
-            session_id=request.session_id,
-            user_id=getattr(request, "user_id", None),
-        )
+        return result["response_payload"]
 
     def _legacy_chat(self, request) -> dict:
         state = self.session_store.get_or_create(request.session_id)

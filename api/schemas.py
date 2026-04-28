@@ -247,6 +247,7 @@ class AssistantChatResponse(BaseModel):
     suggested_actions: list[str] = Field(default_factory=list)
     pending_action: AssistantPendingActionResponse | None = None
     executed_actions: list[AssistantExecutedActionResponse] = Field(default_factory=list)
+    undo_available: bool = False
 
 
 class AssistantHealthResponse(BaseModel):
