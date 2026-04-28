@@ -16,7 +16,7 @@ from service.agent_runtime.state import SmartOrderAgentState
 from service.rag.retriever import AdvancedRagRetriever
 
 
-def build_agent_graph(planner=None, retriever=None, checkpointer=None):
+def build_agent_graph(planner=None, retriever=None, action_executor=None, checkpointer=None):
     planner = planner or LangGraphAgentPlanner()
     retriever = retriever or AdvancedRagRetriever()
     checkpointer = checkpointer or InMemorySaver()
@@ -24,8 +24,8 @@ def build_agent_graph(planner=None, retriever=None, checkpointer=None):
     workflow = StateGraph(SmartOrderAgentState)
     workflow.add_node("plan", lambda state: plan_node(state, planner))
     workflow.add_node("rag", lambda state: rag_node(state, retriever))
-    workflow.add_node("action", action_node)
-    workflow.add_node("undo", undo_node)
+    workflow.add_node("action", lambda state: action_node(state, action_executor))
+    workflow.add_node("undo", lambda state: undo_node(state, action_executor))
     workflow.add_node("respond", respond_node)
 
     workflow.set_entry_point("plan")
