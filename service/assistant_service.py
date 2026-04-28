@@ -5,10 +5,10 @@ from sqlalchemy.orm import Session
 
 from api.schemas import AssistantChatRequest, AssistantChatResponse, AssistantHealthResponse
 from service.agent_runtime.graph import build_agent_graph
+from service.agent_runtime.nodes import LocalActionExecutor
 from service.agent_core import AgentCore
 from service.agent_loop import AgentLoop
 from service.assistant_composer import compose_assistant_response
-from service.assistant_orchestrator import AssistantOrchestrator
 from service.assistant_retriever import AssistantRetriever
 from service.assistant_session_store import InMemoryAssistantSessionStore
 from service.grounded_responder import GroundedResponder
@@ -16,6 +16,7 @@ from service.intent_router import IntentRouter
 from service.tool_registry import ToolRegistry, ToolSchema
 from service.tools.address_tool import save_address_tool
 from service.tools.cart_tool import add_to_cart_tool
+from service.user_memory_service import UserMemoryService
 from tools.assistant_vector_store import AssistantVectorStore
 
 _SESSION_STORE = InMemoryAssistantSessionStore()
@@ -137,7 +138,12 @@ class AssistantService:
             user_id=request.user_id,
         ).session_id
         if self._graph is None:
-            self._graph = build_agent_graph()
+            self._graph = build_agent_graph(
+                action_executor=LocalActionExecutor(self.session),
+                memory_service=(
+                    UserMemoryService(self.session) if self.session is not None else None
+                ),
+            )
         result = self._graph.invoke(
             {
                 "messages": [HumanMessage(content=request.message)],

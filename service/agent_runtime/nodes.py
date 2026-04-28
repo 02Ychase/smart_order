@@ -13,6 +13,32 @@ def latest_user_message(state: dict) -> str:
     return ""
 
 
+def load_memory_node(state: dict, memory_service=None) -> dict:
+    user_id = state.get("user_id")
+    if user_id is None or memory_service is None:
+        return {"loaded_user_memories": []}
+    return {"loaded_user_memories": memory_service.list_memories(user_id)}
+
+
+def memory_writer_node(state: dict, memory_service=None) -> dict:
+    user_id = state.get("user_id")
+    if user_id is None or memory_service is None:
+        return {"saved_memories": []}
+    saved = []
+    for candidate in state.get("memory_candidates", []):
+        if float(candidate.get("confidence", 0.0)) < 0.75:
+            continue
+        saved.append(
+            memory_service.upsert_memory(
+                user_id=user_id,
+                memory_type=candidate["memory_type"],
+                content=candidate["content"],
+                confidence=float(candidate["confidence"]),
+            )
+        )
+    return {"saved_memories": saved}
+
+
 def plan_node(state: dict, planner: LangGraphAgentPlanner) -> dict:
     user_message = latest_user_message(state)
     plan = planner.plan(

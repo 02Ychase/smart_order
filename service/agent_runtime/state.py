@@ -48,6 +48,8 @@ class SmartOrderAgentState(TypedDict):
     user_id: NotRequired[int | None]
     active_topic: NotRequired[str | None]
     loaded_user_memories: NotRequired[list[dict[str, Any]]]
+    memory_candidates: NotRequired[list[dict[str, Any]]]
+    saved_memories: NotRequired[list[dict[str, Any]]]
     recent_evidence: NotRequired[list[dict[str, Any]]]
     recent_action_ids: NotRequired[list[str]]
     current_plan: NotRequired[AgentPlan | None]
