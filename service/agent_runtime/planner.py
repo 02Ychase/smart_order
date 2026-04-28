@@ -17,8 +17,11 @@ class LangGraphAgentPlanner:
 
     def plan(self, user_message: str, context: dict[str, Any]) -> AgentPlan:
         if self._llm is not None:
-            raw = self._llm.call(user_message, self.prompts.load("agent.planner"))
-            return self._parse(raw)
+            try:
+                raw = self._llm.call(user_message, self.prompts.load("agent.planner"))
+                return self._parse(raw)
+            except Exception:
+                return self._rule_plan(user_message)
 
         if self._model_name:
             try:
@@ -45,19 +48,31 @@ class LangGraphAgentPlanner:
         return AgentPlan(
             intent=parsed.get("intent", "unsupported"),
             normalized_query=parsed.get("normalized_query", ""),
-            requires_rag=bool(parsed.get("requires_rag", False)),
+            requires_rag=self._parse_bool(parsed.get("requires_rag", False)),
             filters=filters,
             tool_calls=[
                 GraphToolCall(
                     tool_name=item.get("tool_name", ""),
                     arguments=item.get("arguments", {}),
-                    writes_database=bool(item.get("writes_database", False)),
+                    writes_database=self._parse_bool(item.get("writes_database", False)),
                 )
-                for item in parsed.get("tool_calls", [])
+                for item in parsed.get("tool_calls") or []
             ],
-            should_answer_directly=bool(parsed.get("should_answer_directly", True)),
+            should_answer_directly=self._parse_bool(parsed.get("should_answer_directly", True)),
             response_hint=parsed.get("response_hint", ""),
         )
+
+    @staticmethod
+    def _parse_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes"}:
+                return True
+            if normalized in {"false", "0", "no"}:
+                return False
+        return bool(value)
 
     @staticmethod
     def _clean_json(raw: str) -> str:
