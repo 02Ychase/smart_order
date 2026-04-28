@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import sys
 from pathlib import Path
 
@@ -9,7 +10,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from api.db import SessionLocal
-from service.rag_retriever import RagRetriever
+from service.agent_runtime.state import AgentPlan
+from service.rag.retriever import AdvancedRagRetriever
 
 
 def _passes_constraints(evidence, constraints: dict) -> bool:
@@ -80,7 +82,7 @@ def evaluate_cases(cases: list[dict], retriever) -> dict:
     diversity_passes = 0
     citation_scores = []
     for case in cases:
-        evidence = retriever.retrieve(case["query"], limit=5)
+        evidence = _retrieve_case(case, retriever, limit=5)
         expected_ids = set(case.get("expected_source_ids") or [])
         if expected_ids:
             retrieved_ids = {item.source_id for item in evidence}
@@ -109,6 +111,45 @@ def evaluate_cases(cases: list[dict], retriever) -> dict:
     }
 
 
+def _retrieve_case(case: dict, retriever, limit: int) -> list:
+    parameters = inspect.signature(retriever.retrieve).parameters
+    if "agent_plan" not in parameters:
+        return retriever.retrieve(case["query"], limit=limit)
+
+    return retriever.retrieve(
+        case["query"],
+        agent_plan=_agent_plan_for_case(case),
+        memories=[],
+        limit=limit,
+    )
+
+
+def _agent_plan_for_case(case: dict) -> AgentPlan:
+    constraints = case.get("constraints") or {}
+    cuisine_types = (
+        constraints.get("cuisine_types")
+        or constraints.get("allowed_cuisine_types")
+        or []
+    )
+    required_keywords = constraints.get("required_keywords") or []
+    expected_type = case.get("expected_source_type")
+    intent = "knowledge" if expected_type == "merchant" else "recommendation"
+    return AgentPlan(
+        intent=intent,
+        normalized_query=case["query"],
+        requires_rag=True,
+        filters={
+            "cuisine_types": cuisine_types,
+            "flavor_preferences": required_keywords,
+            "required_keywords": required_keywords,
+            "forbidden_keywords": constraints.get("forbidden_keywords") or [],
+            "budget_max": constraints.get("budget_max"),
+            "party_size": constraints.get("party_size"),
+            "exclude_allergens": constraints.get("exclude_allergens") or [],
+        },
+    )
+
+
 def load_cases(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
@@ -118,7 +159,7 @@ def main() -> int:
     cases = load_cases(cases_path)
     session = SessionLocal()
     try:
-        metrics = evaluate_cases(cases, retriever=RagRetriever(session=session))
+        metrics = evaluate_cases(cases, retriever=AdvancedRagRetriever(session=session))
     finally:
         session.close()
     print(json.dumps(metrics, ensure_ascii=False, indent=2))

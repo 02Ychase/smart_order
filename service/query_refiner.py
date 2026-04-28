@@ -33,9 +33,6 @@ class QueryRefiner:
         self._model_name = os.getenv("MODEL_NAME")
 
     def refine(self, message: str) -> str:
-        if not self._model_name:
-            return message
-
         try:
             llm_response = call_llm(query=message, system_instruction=_REFINER_PROMPT)
             cleaned = self._clean_json_response(llm_response)

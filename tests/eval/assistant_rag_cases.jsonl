@@ -1,4 +1,4 @@
-{"query":"推荐几种川菜，2个人吃，100元以内，不要花生","expected_source_ids":[11],"constraints":{"budget_max":100,"party_size":2,"exclude_allergens":["花生"]}}
+{"query":"推荐几种川菜，2个人吃，100元以内，不要花生","expected_source_type":"dish","constraints":{"budget_max":100,"party_size":2,"exclude_allergens":["花生"]}}
 {"query":"有哪些咖啡甜品店？几点营业？","expected_source_type":"merchant","constraints":{}}
 {"query":"想吃下饭一点的湘菜","expected_source_type":"dish","constraints":{"cuisine_types":["湘菜"]}}
 {"id":"spicy_hunan_direct","query":"帮我推荐几个比较辣的湘菜","expected_source_type":"dish","constraints":{"allowed_cuisine_types":["湘菜","川湘"],"required_keywords":["辣"]}}

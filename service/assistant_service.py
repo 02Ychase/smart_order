@@ -261,7 +261,7 @@ class AssistantService:
                     tool_results.append({"tool": tool_call["name"], "error": str(e)})
 
         candidates = []
-        if decision.intent in ("knowledge", "recommendation") and not tool_results:
+        if decision.intent in ("knowledge", "recommendation"):
             from service.assistant_models import AssistantParsedQuery
             parsed = AssistantParsedQuery(
                 raw_message=request.message,

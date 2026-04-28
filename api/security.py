@@ -10,7 +10,7 @@ from passlib.context import CryptContext
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(PROJECT_ROOT / ".env")
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "smart-order-phase1-secret")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_MINUTES = 30

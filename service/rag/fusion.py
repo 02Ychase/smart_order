@@ -28,6 +28,10 @@ def reciprocal_rank_fusion(route_results: list[list[RecallCandidate]], limit: in
                 citation=candidate.citation,
             )
             by_key[candidate.stable_key] = fused
+        else:
+            _merge_facts(fused, candidate)
+            if not fused.citation and candidate.citation:
+                fused.citation = candidate.citation
         fused.route_scores[candidate.route] = candidate.score
         fused.route_ranks[candidate.route] = candidate.rank
         if candidate.route == "dense":
@@ -40,3 +44,14 @@ def reciprocal_rank_fusion(route_results: list[list[RecallCandidate]], limit: in
     for item in fused_items:
         item.final_score = totals[item.stable_key]
     return sorted(fused_items, key=lambda item: item.final_score, reverse=True)[:limit]
+
+
+def _merge_facts(fused: FusedCandidate, candidate: RecallCandidate) -> None:
+    for key, value in candidate.facts.items():
+        current = fused.facts.get(key)
+        if key not in fused.facts or (_has_value(value) and not _has_value(current)):
+            fused.facts[key] = value
+
+
+def _has_value(value) -> bool:
+    return value is not None and value != "" and value != []

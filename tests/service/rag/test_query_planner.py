@@ -17,3 +17,16 @@ def test_query_planner_generates_expansion_queries_for_spicy_hunan() -> None:
     assert "湘菜 香辣 下饭" in plan.expansion_queries
     assert plan.source_types == ["dish"]
     assert plan.should_filters["cuisine_types"] == ["湘菜"]
+
+
+def test_query_planner_routes_merchant_knowledge_queries_to_merchants() -> None:
+    planner = RagQueryPlanner()
+    agent_plan = AgentPlan(
+        intent="knowledge",
+        normalized_query="有哪些咖啡甜品店？几点营业？",
+        requires_rag=True,
+    )
+
+    plan = planner.plan("有哪些咖啡甜品店？几点营业？", agent_plan, memories=[])
+
+    assert plan.source_types == ["merchant"]

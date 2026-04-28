@@ -104,6 +104,16 @@ class AgentCore:
             return {"reasoning": "查询信息", "intent": "knowledge", "needs_clarification": False, "tool_calls": [{"name": "search_knowledge_base", "parameters": {"query": query}}]}
 
         if "推荐" in msg or "吃什么" in msg or "适合" in msg:
+            has_explicit_constraints = any(ch.isdigit() for ch in msg) or any(
+                token in msg for token in ("人", "预算", "元", "以内", "不要", "不吃")
+            )
+            if has_explicit_constraints:
+                return {
+                    "reasoning": "个性化推荐且已有明确约束",
+                    "intent": "recommendation",
+                    "needs_clarification": False,
+                    "tool_calls": [],
+                }
             return {"reasoning": "个性化推荐但缺少约束", "intent": "recommendation", "needs_clarification": True, "clarification_question": "请告诉我这顿大概几个人吃、预算多少？", "tool_calls": []}
 
         return {"reasoning": "无法识别", "intent": "unsupported", "needs_clarification": False, "tool_calls": []}
