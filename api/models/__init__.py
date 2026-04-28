@@ -1,4 +1,5 @@
 from api.db import Base
+from api.models.action_journal import ActionJournal
 from api.models.cart import Cart, CartItem
 from api.models.catalog import Dish, DishCategory, Merchant
 from api.models.order import CheckoutOrder, DeliveryQuote, MerchantOrder, OrderItem, PaymentRecord
@@ -18,4 +19,5 @@ __all__ = [
     "OrderItem",
     "PaymentRecord",
     "DeliveryQuote",
+    "ActionJournal",
 ]
