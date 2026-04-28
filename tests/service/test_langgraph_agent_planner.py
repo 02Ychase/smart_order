@@ -27,6 +27,7 @@ def test_planner_recommends_directly_without_budget_or_party_size() -> None:
     assert plan.should_answer_directly is True
     assert plan.requires_rag is True
     assert plan.filters["cuisine_types"] == ["湘菜"]
+    assert plan.filters["flavor_preferences"] == ["辣"]
     assert plan.filters["party_size"] is None
     assert plan.filters["budget_max"] is None
 
