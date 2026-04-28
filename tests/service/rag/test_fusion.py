@@ -31,3 +31,20 @@ def test_rrf_deduplicates_same_route_stable_key_before_scoring() -> None:
     by_key = {item.stable_key: item for item in fused}
     assert by_key["dish:1"].final_score == 1 / (60 + 1)
     assert by_key["dish:1"].final_score == by_key["dish:2"].final_score
+
+
+def test_rrf_deduplicates_same_route_stable_key_across_batches() -> None:
+    dense_a = [
+        RecallCandidate(stable_key="dish:1", source_type="dish", source_id=1, route="dense", rank=1, score=0.9),
+    ]
+    dense_b = [
+        RecallCandidate(stable_key="dish:1", source_type="dish", source_id=1, route="dense", rank=2, score=0.8),
+        RecallCandidate(stable_key="dish:2", source_type="dish", source_id=2, route="dense", rank=1, score=0.7),
+    ]
+
+    fused = reciprocal_rank_fusion([dense_a, dense_b], limit=2)
+
+    by_key = {item.stable_key: item for item in fused}
+    assert by_key["dish:1"].final_score == 1 / (60 + 1)
+    assert by_key["dish:1"].route_ranks["dense"] == 1
+    assert by_key["dish:1"].final_score == by_key["dish:2"].final_score
