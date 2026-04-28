@@ -12,10 +12,12 @@ def apply_hard_filters(candidates: list[FusedCandidate], plan: RagQueryPlan) -> 
     kept = []
     for candidate in candidates:
         facts = candidate.facts
-        if require_available and facts.get("is_available") is False:
+        if require_available and facts.get("is_available") is not True:
             continue
-        if exclude_allergens and any(item in set(facts.get("allergens") or []) for item in exclude_allergens):
-            continue
+        if exclude_allergens:
+            allergens = facts.get("allergens")
+            if allergens is None or any(item in set(allergens) for item in exclude_allergens):
+                continue
         if merchant_name and facts.get("merchant_name") != merchant_name:
             continue
         kept.append(candidate)

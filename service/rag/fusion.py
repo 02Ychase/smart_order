@@ -8,7 +8,14 @@ def reciprocal_rank_fusion(route_results: list[list[RecallCandidate]], limit: in
     totals: dict[str, float] = {}
 
     for candidates in route_results:
+        best_by_route_key: dict[tuple[str, str], RecallCandidate] = {}
         for candidate in candidates:
+            route_key = (candidate.route, candidate.stable_key)
+            current = best_by_route_key.get(route_key)
+            if current is None or candidate.rank < current.rank:
+                best_by_route_key[route_key] = candidate
+
+        for candidate in best_by_route_key.values():
             fused = by_key.get(candidate.stable_key)
             if fused is None:
                 fused = FusedCandidate(
