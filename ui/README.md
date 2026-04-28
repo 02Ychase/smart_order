@@ -70,6 +70,8 @@ npm run preview
 - `POST /api/assistant/chat`
 - `GET /api/assistant/health`
 
+The assistant response can include `undo_available`. Local reversible actions such as cart clear, address delete, and user preference changes execute immediately and can be undone by sending a follow-up message such as “撤回刚才的操作”.
+
 ## 代理配置
 
 开发环境下，Vite会将 `/api` 路径代理到 `http://localhost:8000`，确保后端服务在该地址运行。

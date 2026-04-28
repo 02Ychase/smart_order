@@ -23,15 +23,19 @@ npm install
 npm run dev
 ```
 
-## Smart Assistant Agent + RAG
+## LangGraph Agent + Advanced RAG
 
-The assistant uses a controlled LLM Agent architecture:
+The assistant uses LangGraph as the runtime state machine. Each chat session maps to a LangGraph thread ID, so short-term messages and recent actions are checkpointed per session.
 
-1. Agent Planner classifies intent and emits a structured tool plan.
-2. Tool Registry executes catalog search, recommendation, cart, and address tools.
-3. Hybrid RAG combines query rewrite, Pinecone dense recall, metadata/keyword recall, SQL hard filters, reranking, and citation evidence.
-4. Confirmation Manager gates side-effect operations such as cart updates and address saves.
-5. Evaluation cases report recall@5 and constraint pass rate.
+The main flow is:
+
+1. Load short-term and long-term memory.
+2. Use an LLM planner to create a structured plan.
+3. Route to RAG, local write action, undo, or direct answer.
+4. Record reversible cart/address/preference writes in the action journal.
+5. Generate grounded answers from evidence.
+
+RAG uses multi-route recall, RRF fusion, hard filters, weighted reranking, diversification, and citation-backed evidence packs.
 
 Focused verification:
 
