@@ -38,3 +38,24 @@ def test_assistant_service_invokes_langgraph_runtime() -> None:
 
     assert response["message"] == "推荐结果"
     assert graph.calls[0][1]["configurable"]["thread_id"] == "s1"
+
+
+def test_assistant_service_builds_graph_with_session_backed_rag_retriever(monkeypatch) -> None:
+    captured = {}
+
+    class StubSqlAlchemySession:
+        def scalars(self, statement):
+            return []
+
+    def fake_build_agent_graph(**kwargs):
+        captured.update(kwargs)
+        return StubGraph()
+
+    monkeypatch.setattr("service.assistant_service.build_agent_graph", fake_build_agent_graph)
+    service = AssistantService(session=StubSqlAlchemySession())
+
+    service.chat(AssistantChatRequest(message="推荐几个湘菜", session_id="s1", user_id=9))
+
+    route_names = [type(route).__name__ for route in captured["retriever"].recall_routes]
+    assert "SqlCatalogRecallRoute" in route_names
+    assert "BusinessRecallRoute" in route_names

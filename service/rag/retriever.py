@@ -28,13 +28,46 @@ class AdvancedRagRetriever:
 
     def retrieve(self, original_query: str, agent_plan: AgentPlan, memories: list[dict] | None = None, limit: int = 5) -> list[RagEvidence]:
         plan = self.query_planner.plan(original_query, agent_plan, memories or [])
+        output_limit = self._output_limit(plan, default=limit)
         route_results = [route.recall(plan, limit=50) for route in self.recall_routes]
         fused = reciprocal_rank_fusion(route_results, limit=50)
         filtered = apply_hard_filters(fused, plan)
         ranked = self.reranker.rerank(filtered, original_query=original_query)
+        ranked = self._apply_result_ordering(ranked, plan)
         merchant_scoped = bool(plan.must_filters.get("merchant_name"))
-        diversified = diversify(ranked, limit=limit, merchant_scoped=merchant_scoped)
+        diversified = diversify(ranked, limit=output_limit, merchant_scoped=merchant_scoped)
         return [self._to_evidence(item) for item in diversified]
+
+    @staticmethod
+    def _output_limit(plan, default: int) -> int:
+        raw_limit = (plan.should_filters or {}).get("limit")
+        try:
+            parsed = int(raw_limit)
+        except (TypeError, ValueError):
+            return default
+        return max(1, min(parsed, default))
+
+    @staticmethod
+    def _apply_result_ordering(candidates: list[FusedCandidate], plan) -> list[FusedCandidate]:
+        sort_by = (plan.should_filters or {}).get("sort_by")
+        if sort_by == "price_desc":
+            return sorted(
+                candidates,
+                key=lambda item: (
+                    float(item.facts.get("price") or 0.0),
+                    item.final_score,
+                ),
+                reverse=True,
+            )
+        if sort_by == "price_asc":
+            return sorted(
+                candidates,
+                key=lambda item: (
+                    float(item.facts.get("price") or 0.0),
+                    -item.final_score,
+                ),
+            )
+        return candidates
 
     def _to_evidence(self, candidate: FusedCandidate) -> RagEvidence:
         facts = candidate.facts

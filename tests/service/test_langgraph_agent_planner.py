@@ -37,6 +37,83 @@ def test_planner_recommends_directly_without_budget_or_party_size() -> None:
     assert plan.filters["budget_max"] is None
 
 
+def test_planner_normalizes_hallucinated_dish_search_tool_to_recommendation_tool() -> None:
+    planner = LangGraphAgentPlanner()
+    planner._llm = StubLLM({
+        "intent": "recommendation",
+        "normalized_query": "湘菜",
+        "requires_rag": True,
+        "filters": {},
+        "tool_calls": [
+            {
+                "tool_name": "search_dishes",
+                "arguments": {"query": "湘菜", "cuisine_types": ["湘菜"]},
+                "writes_database": False,
+            }
+        ],
+        "should_answer_directly": True,
+        "response_hint": "推荐湘菜",
+    })
+
+    plan = planner.plan("推荐几个湘菜", {})
+
+    assert plan.requires_rag is True
+    assert plan.tool_calls[0].tool_name == "recommend_dishes"
+    assert plan.tool_calls[0].writes_database is False
+    assert plan.filters["cuisine_types"] == ["湘菜"]
+
+
+def test_planner_extracts_limit_and_price_sort_from_user_message() -> None:
+    planner = LangGraphAgentPlanner()
+    planner._llm = StubLLM({
+        "intent": "recommendation",
+        "normalized_query": "最贵的湘菜",
+        "requires_rag": True,
+        "filters": {"cuisine_types": ["湘菜"]},
+        "tool_calls": [
+            {
+                "tool_name": "recommend_dishes",
+                "arguments": {"query": "最贵的湘菜", "cuisine_types": ["湘菜"]},
+                "writes_database": False,
+            }
+        ],
+        "should_answer_directly": True,
+        "response_hint": "推荐最贵的湘菜",
+    })
+
+    plan = planner.plan("推荐一个最贵的湘菜", {})
+
+    assert plan.filters["limit"] == 1
+    assert plan.filters["sort_by"] == "price_desc"
+    assert plan.filters["price_preference"] == "most_expensive"
+
+
+def test_planner_normalizes_hallucinated_cafe_search_tool_to_catalog_tool() -> None:
+    planner = LangGraphAgentPlanner()
+    planner._llm = StubLLM({
+        "intent": "knowledge",
+        "normalized_query": "卖咖啡的店铺",
+        "requires_rag": False,
+        "filters": {},
+        "tool_calls": [
+            {
+                "tool_name": "search_cafes",
+                "arguments": {"query": "卖咖啡的店铺", "required_keywords": ["咖啡"]},
+                "writes_database": False,
+            }
+        ],
+        "should_answer_directly": True,
+        "response_hint": "查询咖啡店",
+    })
+
+    plan = planner.plan("推荐几个卖咖啡的店铺", {})
+
+    assert plan.requires_rag is True
+    assert plan.tool_calls[0].tool_name == "search_catalog"
+    assert plan.tool_calls[0].writes_database is False
+    assert plan.filters["required_keywords"] == ["咖啡"]
+
+
 def test_planner_rule_fallback_detects_undo() -> None:
     planner = LangGraphAgentPlanner()
     planner._llm = None
@@ -71,7 +148,7 @@ def test_planner_llm_failure_falls_back_to_rule_plan_for_cart_clear() -> None:
     assert plan.tool_calls[0].writes_database is True
 
 
-def test_planner_parses_common_false_strings_as_false_from_fenced_json() -> None:
+def test_planner_parses_common_false_strings_and_normalizes_read_tool_from_fenced_json() -> None:
     planner = LangGraphAgentPlanner()
     planner._llm = StubLLM(
         """
@@ -96,8 +173,9 @@ def test_planner_parses_common_false_strings_as_false_from_fenced_json() -> None
 
     plan = planner.plan("营业时间", {})
 
-    assert plan.requires_rag is False
+    assert plan.requires_rag is True
     assert plan.should_answer_directly is False
+    assert plan.tool_calls[0].tool_name == "search_catalog"
     assert plan.tool_calls[0].writes_database is False
 
 

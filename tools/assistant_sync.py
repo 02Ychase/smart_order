@@ -84,6 +84,7 @@ def _create_dish_candidate(dish: dict, merchant: dict) -> dict:
             "flavor_profile": dish["flavor_profile"],
             "ingredients": dish["ingredients"],
             "allergens": dish["allergens"],
+            "is_available": dish.get("is_available", True),
         },
     }
 
@@ -102,6 +103,8 @@ def _create_merchant_candidate(merchant: dict) -> dict:
             "merchant_tags": merchant["merchant_tags"],
             "business_hours": merchant["business_hours"],
             "description": merchant["description"],
+            "homepage_category": merchant["homepage_category"],
+            "is_available": True,
         },
     }
 

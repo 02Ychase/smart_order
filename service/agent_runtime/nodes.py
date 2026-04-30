@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from service.agent_runtime.planner import LangGraphAgentPlanner
+from service.agent_runtime.planner import ACTION_TOOL_NAMES, RAG_TOOL_NAMES, LangGraphAgentPlanner
 from service.rag.retriever import AdvancedRagRetriever
 
 
@@ -59,10 +59,10 @@ def route_after_plan(state: dict) -> str:
         return "respond"
     if plan.intent == "undo_action":
         return "undo"
-    if plan.tool_calls:
-        return "action"
-    if plan.requires_rag:
+    if plan.requires_rag or any(call.tool_name in RAG_TOOL_NAMES for call in plan.tool_calls):
         return "rag"
+    if any(call.tool_name in ACTION_TOOL_NAMES for call in plan.tool_calls):
+        return "action"
     return "respond"
 
 
@@ -106,7 +106,10 @@ class LocalActionExecutor:
 
         user_id = state.get("user_id")
         session_id = state.get("session_id")
-        call = plan.tool_calls[0]
+        call = next(
+            (item for item in plan.tool_calls if item.tool_name in ACTION_TOOL_NAMES),
+            plan.tool_calls[0],
+        )
         if call.tool_name == "cart_clear":
             result = clear_cart_tool(user_id=user_id, session=self.session)
             journal = ActionJournalService(self.session).record_completed_action(
@@ -215,6 +218,20 @@ def respond_node(state: dict) -> dict:
                     "reason": "、".join(item.get("why_matched", [])),
                 }
             )
+        elif item.get("source_type") == "merchant":
+            merchant_id = item.get("merchant_id") or facts.get("merchant_id") or facts.get("id") or 0
+            merchant_name = facts.get("merchant_name") or facts.get("name") or item.get("title") or ""
+            recommendations.append(
+                {
+                    "source_type": "merchant",
+                    "merchant_id": merchant_id,
+                    "merchant_name": merchant_name,
+                    "dish_id": None,
+                    "dish_name": None,
+                    "price": None,
+                    "reason": "、".join(item.get("why_matched", [])),
+                }
+            )
         citations.append(
             {
                 "source_type": item.get("source_type"),
@@ -227,7 +244,7 @@ def respond_node(state: dict) -> dict:
     tool_results = state.get("tool_results", [])
     if recommendations:
         message = "结合商家数据和匹配理由，我推荐：\n" + "\n".join(
-            f"{index}. {item['dish_name']}（{item['merchant_name']}）"
+            _recommendation_line(index, item)
             for index, item in enumerate(recommendations, start=1)
         )
     elif tool_results:
@@ -256,6 +273,12 @@ def respond_node(state: dict) -> dict:
         "messages": state.get("messages", []) + [AIMessage(content=message)],
         "response_payload": payload,
     }
+
+
+def _recommendation_line(index: int, item: dict) -> str:
+    if item.get("source_type") == "merchant":
+        return f"{index}. {item['merchant_name']}"
+    return f"{index}. {item['dish_name']}（{item['merchant_name']}）"
 
 
 def _external_response_type(plan, state: dict) -> str:

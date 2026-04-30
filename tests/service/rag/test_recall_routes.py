@@ -1,5 +1,5 @@
 from service.rag.models import RagQueryPlan
-from service.rag.recall import SqlCatalogRecallRoute
+from service.rag.recall import DenseVectorRecallRoute, SqlCatalogRecallRoute
 
 
 class StubCatalogService:
@@ -25,3 +25,36 @@ def test_sql_recall_returns_dish_candidates_for_cuisine_and_flavor() -> None:
     assert candidates[0].stable_key == "dish:11"
     assert candidates[0].facts["dish_name"] == "小炒黄牛肉"
     assert candidates[0].route == "sql"
+
+
+class StubVectorStore:
+    def is_ready(self):
+        return True
+
+    def semantic_search(self, query, top_k, namespace):
+        return [
+            {
+                "id": "dish_11",
+                "score": 0.9,
+                "metadata": {
+                    "source_type": "dish",
+                    "source_id": 11,
+                    "dish_id": 11,
+                    "dish_name": "小炒黄牛肉",
+                    "cuisine_type": "湘菜",
+                },
+            }
+        ]
+
+
+def test_dense_recall_defaults_missing_availability_metadata_to_available() -> None:
+    plan = RagQueryPlan(
+        original_query="湘菜",
+        normalized_query="湘菜",
+        expansion_queries=["湘菜"],
+        source_types=["dish"],
+    )
+
+    candidates = DenseVectorRecallRoute(StubVectorStore()).recall(plan, limit=10)
+
+    assert candidates[0].facts["is_available"] is True

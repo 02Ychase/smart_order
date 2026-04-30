@@ -13,6 +13,10 @@ class RagQueryPlanner:
         exclude_allergens = filters.get("exclude_allergens") or []
         required_keywords = filters.get("required_keywords") or []
         forbidden_keywords = filters.get("forbidden_keywords") or []
+        source_type_filters = filters.get("source_types") or []
+        limit = filters.get("limit")
+        sort_by = filters.get("sort_by")
+        price_preference = filters.get("price_preference")
 
         expansion_queries = [normalized, original_query]
         if "湘菜" in cuisine_types and "辣" in flavor_preferences:
@@ -33,12 +37,16 @@ class RagQueryPlanner:
             must_filters["required_keywords"] = required_keywords
         if forbidden_keywords:
             must_filters["forbidden_keywords"] = forbidden_keywords
+        if filters.get("merchant_name"):
+            must_filters["merchant_name"] = filters.get("merchant_name")
 
         source_types = ["dish"]
         if agent_plan.intent == "knowledge":
             source_types = ["dish", "merchant"]
             if any(term in original_query for term in ("店", "商家", "营业", "电话", "地址")):
                 source_types = ["merchant"]
+        if source_type_filters:
+            source_types = [item for item in source_type_filters if item in {"dish", "merchant"}] or source_types
 
         return RagQueryPlan(
             original_query=original_query,
@@ -50,6 +58,9 @@ class RagQueryPlanner:
                 "flavor_preferences": flavor_preferences,
                 "budget_max": filters.get("budget_max"),
                 "party_size": filters.get("party_size"),
+                "limit": limit,
+                "sort_by": sort_by,
+                "price_preference": price_preference,
             },
             source_types=source_types,
             answer_mode=agent_plan.intent,

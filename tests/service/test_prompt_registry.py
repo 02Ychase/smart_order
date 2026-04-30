@@ -9,6 +9,9 @@ def test_prompt_registry_loads_planner_prompt() -> None:
     assert "smart_order" in prompt
     assert "should_answer_directly" in prompt
     assert "只返回" in prompt
+    assert "recommend_dishes" in prompt
+    assert "search_catalog" in prompt
+    assert "禁止编造工具名" in prompt
 
 
 def test_prompt_registry_rejects_unknown_prompt_key() -> None:

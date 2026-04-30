@@ -23,6 +23,8 @@ class DenseVectorRecallRoute:
                     continue
                 for match in self.vector_store.semantic_search(query, top_k=limit, namespace=namespace):
                     metadata = match.get("metadata", {})
+                    facts = dict(metadata)
+                    facts.setdefault("is_available", True)
                     source_type = metadata.get("source_type", "dish")
                     source_id = int(metadata.get("source_id") or metadata.get("dish_id") or metadata.get("merchant_id"))
                     candidates.append(
@@ -33,7 +35,7 @@ class DenseVectorRecallRoute:
                             route="dense",
                             rank=rank,
                             score=float(match.get("score", 0.0)),
-                            facts=dict(metadata),
+                            facts=facts,
                             citation=str(metadata.get("content", ""))[:180],
                         )
                     )

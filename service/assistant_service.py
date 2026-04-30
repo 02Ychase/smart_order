@@ -13,6 +13,7 @@ from service.assistant_retriever import AssistantRetriever
 from service.assistant_session_store import InMemoryAssistantSessionStore
 from service.grounded_responder import GroundedResponder
 from service.intent_router import IntentRouter
+from service.rag.retriever import AdvancedRagRetriever
 from service.tool_registry import ToolRegistry, ToolSchema
 from service.tools.address_tool import save_address_tool
 from service.tools.cart_tool import add_to_cart_tool
@@ -138,10 +139,12 @@ class AssistantService:
             user_id=request.user_id,
         ).session_id
         if self._graph is None:
+            graph_session = self.session if self._has_sqlalchemy_session() else None
             self._graph = build_agent_graph(
+                retriever=AdvancedRagRetriever(graph_session),
                 action_executor=LocalActionExecutor(self.session),
                 memory_service=(
-                    UserMemoryService(self.session) if self.session is not None else None
+                    UserMemoryService(self.session) if graph_session is not None else None
                 ),
             )
         result = self._graph.invoke(
@@ -157,6 +160,9 @@ class AssistantService:
             config={"configurable": {"thread_id": session_id}},
         )
         return result["response_payload"]
+
+    def _has_sqlalchemy_session(self) -> bool:
+        return self.session is not None and hasattr(self.session, "scalars")
 
     def _legacy_chat(self, request) -> dict:
         state = self.session_store.get_or_create(request.session_id)

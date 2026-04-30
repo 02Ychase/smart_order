@@ -47,7 +47,7 @@ npm --prefix ui test -- src/__tests__/floatingAssistant.test.js --run
 
 
 
-uvicorn api.main:app --host 127.0.0.1 --port 8000 --no-access-log
+后端：python run.py
 
 
- npm --prefix ui run dev
+前端：npm run dev

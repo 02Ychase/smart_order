@@ -2,11 +2,30 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from service.agent_runtime.prompts import PromptRegistry
 from service.agent_runtime.state import AgentPlan, GraphToolCall
 from tools.llm_tool import call_llm
+
+
+RAG_TOOL_NAMES = {"recommend_dishes", "search_catalog"}
+ACTION_TOOL_NAMES = {"cart_clear"}
+UNDO_TOOL_NAMES = {"undo_last_action"}
+ALLOWED_TOOL_NAMES = RAG_TOOL_NAMES | ACTION_TOOL_NAMES | UNDO_TOOL_NAMES
+SEARCH_TOOL_ALIASES = {
+    "search_dishes": "recommend_dishes",
+    "search_food": "recommend_dishes",
+    "search_menu": "search_catalog",
+    "search_catalog": "search_catalog",
+    "search_cafes": "search_catalog",
+    "search_coffee": "search_catalog",
+    "search_merchants": "search_catalog",
+    "search_restaurants": "search_catalog",
+    "search_stores": "search_catalog",
+}
+COUNT_PATTERN = re.compile(r"(\d+)\s*(?:个|道|份|款|家)")
 
 
 class LangGraphAgentPlanner:
@@ -19,9 +38,9 @@ class LangGraphAgentPlanner:
         if self._llm is not None:
             try:
                 raw = self._llm.call(user_message, self.prompts.load("agent.planner"))
-                return self._parse(raw)
+                return self._apply_user_message_hints(self._parse(raw), user_message)
             except Exception:
-                return self._rule_plan(user_message)
+                return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
 
         if self._model_name:
             try:
@@ -29,38 +48,161 @@ class LangGraphAgentPlanner:
                     query=json.dumps({"message": user_message, "context": context}, ensure_ascii=False),
                     system_instruction=self.prompts.load("agent.planner"),
                 )
-                return self._parse(raw)
+                return self._apply_user_message_hints(self._parse(raw), user_message)
             except Exception:
-                return self._rule_plan(user_message)
+                return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
 
-        return self._rule_plan(user_message)
+        return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
 
     def _parse(self, raw: str | dict[str, Any]) -> AgentPlan:
         parsed = raw if isinstance(raw, dict) else json.loads(self._clean_json(raw))
-        filters = {
+        intent = parsed.get("intent", "unsupported")
+        filters = self._default_filters()
+        filters.update(parsed.get("filters") or {})
+        tool_calls = self._parse_tool_calls(parsed.get("tool_calls") or [], intent)
+        normalized_query = str(parsed.get("normalized_query") or "")
+        normalized_query = self._merge_read_tool_arguments(
+            filters=filters,
+            tool_calls=tool_calls,
+            normalized_query=normalized_query,
+        )
+        requires_rag = self._parse_bool(parsed.get("requires_rag", False))
+        if intent in {"recommendation", "knowledge"} or any(call.tool_name in RAG_TOOL_NAMES for call in tool_calls):
+            requires_rag = True
+        return AgentPlan(
+            intent=intent,
+            normalized_query=normalized_query,
+            requires_rag=requires_rag,
+            filters=filters,
+            tool_calls=tool_calls,
+            should_answer_directly=self._parse_bool(parsed.get("should_answer_directly", True)),
+            response_hint=parsed.get("response_hint", ""),
+        )
+
+    @staticmethod
+    def _default_filters() -> dict[str, Any]:
+        return {
             "cuisine_types": [],
             "flavor_preferences": [],
             "budget_max": None,
             "party_size": None,
             "exclude_allergens": [],
+            "required_keywords": [],
+            "forbidden_keywords": [],
+            "source_types": [],
+            "limit": None,
+            "sort_by": None,
+            "price_preference": None,
         }
-        filters.update(parsed.get("filters") or {})
-        return AgentPlan(
-            intent=parsed.get("intent", "unsupported"),
-            normalized_query=parsed.get("normalized_query", ""),
-            requires_rag=self._parse_bool(parsed.get("requires_rag", False)),
-            filters=filters,
-            tool_calls=[
+
+    def _parse_tool_calls(self, raw_calls: list[dict[str, Any]], intent: str) -> list[GraphToolCall]:
+        calls: list[GraphToolCall] = []
+        seen: set[str] = set()
+        for item in raw_calls:
+            if not isinstance(item, dict):
+                continue
+            raw_name = str(item.get("tool_name") or item.get("name") or "")
+            tool_name = self._normalize_tool_name(raw_name, intent)
+            if tool_name is None or tool_name in seen:
+                continue
+            arguments = item.get("arguments") or item.get("parameters") or {}
+            if not isinstance(arguments, dict):
+                arguments = {}
+            writes_database = self._parse_bool(item.get("writes_database", False))
+            if tool_name in RAG_TOOL_NAMES:
+                writes_database = False
+            if tool_name in ACTION_TOOL_NAMES | UNDO_TOOL_NAMES:
+                writes_database = True
+            calls.append(
                 GraphToolCall(
-                    tool_name=item.get("tool_name", ""),
-                    arguments=item.get("arguments", {}),
-                    writes_database=self._parse_bool(item.get("writes_database", False)),
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    writes_database=writes_database,
                 )
-                for item in parsed.get("tool_calls") or []
-            ],
-            should_answer_directly=self._parse_bool(parsed.get("should_answer_directly", True)),
-            response_hint=parsed.get("response_hint", ""),
-        )
+            )
+            seen.add(tool_name)
+        return calls
+
+    @staticmethod
+    def _normalize_tool_name(raw_name: str, intent: str) -> str | None:
+        tool_name = raw_name.strip()
+        if tool_name in ALLOWED_TOOL_NAMES:
+            return tool_name
+        if tool_name in SEARCH_TOOL_ALIASES:
+            return SEARCH_TOOL_ALIASES[tool_name]
+        if tool_name.startswith("search_"):
+            if any(term in tool_name for term in ("cafe", "coffee", "merchant", "restaurant", "store", "shop")):
+                return "search_catalog"
+            if intent == "recommendation":
+                return "recommend_dishes"
+            if intent == "knowledge":
+                return "search_catalog"
+        return None
+
+    def _merge_read_tool_arguments(
+        self,
+        *,
+        filters: dict[str, Any],
+        tool_calls: list[GraphToolCall],
+        normalized_query: str,
+    ) -> str:
+        query = normalized_query
+        for call in tool_calls:
+            if call.tool_name not in RAG_TOOL_NAMES:
+                continue
+            arguments = call.arguments
+            if not query and arguments.get("query"):
+                query = str(arguments["query"])
+            self._merge_list_filter(filters, "cuisine_types", arguments.get("cuisine_types") or arguments.get("cuisine_type") or arguments.get("cuisine"))
+            self._merge_list_filter(filters, "flavor_preferences", arguments.get("flavor_preferences") or arguments.get("preferences") or arguments.get("flavor"))
+            self._merge_list_filter(filters, "exclude_allergens", arguments.get("exclude_allergens"))
+            self._merge_list_filter(filters, "required_keywords", arguments.get("required_keywords"))
+            self._merge_list_filter(filters, "forbidden_keywords", arguments.get("forbidden_keywords"))
+            self._merge_list_filter(filters, "source_types", arguments.get("source_types") or arguments.get("source_type"))
+            for key in ("budget_max", "party_size", "merchant_name", "limit", "sort_by", "price_preference"):
+                if filters.get(key) in (None, "", []):
+                    value = arguments.get(key)
+                    if value is None and key == "budget_max":
+                        value = arguments.get("budget")
+                    if value is not None:
+                        filters[key] = value
+        return query
+
+    def _apply_user_message_hints(self, plan: AgentPlan, user_message: str) -> AgentPlan:
+        if plan.intent not in {"recommendation", "knowledge"}:
+            return plan
+        filters = dict(plan.filters or {})
+        limit = self._extract_requested_limit(user_message)
+        if limit is not None:
+            filters["limit"] = limit
+        if any(term in user_message for term in ("最贵", "价格最高", "最高价")):
+            filters["sort_by"] = "price_desc"
+            filters["price_preference"] = "most_expensive"
+        elif any(term in user_message for term in ("最便宜", "价格最低", "最低价")):
+            filters["sort_by"] = "price_asc"
+            filters["price_preference"] = "least_expensive"
+        plan.filters = filters
+        return plan
+
+    @staticmethod
+    def _extract_requested_limit(user_message: str) -> int | None:
+        if any(term in user_message for term in ("一个", "一道", "一份", "一款", "一家")):
+            return 1
+        match = COUNT_PATTERN.search(user_message)
+        if match:
+            return max(1, int(match.group(1)))
+        return None
+
+    @staticmethod
+    def _merge_list_filter(filters: dict[str, Any], key: str, value: Any) -> None:
+        if value in (None, "", []):
+            return
+        incoming = value if isinstance(value, list) else [value]
+        existing = list(filters.get(key) or [])
+        for item in incoming:
+            if item not in existing:
+                existing.append(item)
+        filters[key] = existing
 
     @staticmethod
     def _parse_bool(value: Any) -> bool:
