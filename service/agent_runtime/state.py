@@ -55,3 +55,5 @@ class SmartOrderAgentState(TypedDict):
     current_plan: NotRequired[AgentPlan | None]
     tool_results: NotRequired[list[dict[str, Any]]]
     response_payload: NotRequired[dict[str, Any]]
+    iteration_count: NotRequired[int]
+    max_iterations: NotRequired[int]

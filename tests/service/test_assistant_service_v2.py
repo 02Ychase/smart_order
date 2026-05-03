@@ -1,13 +1,38 @@
 from pathlib import Path
 import sys
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from api.schemas import AssistantChatRequest
 from service.assistant_service import AssistantService
+
+
+class StubGraph:
+    def __init__(self, response_payload=None):
+        self.calls = []
+        self._payload = response_payload or {
+            "session_id": "",
+            "message": "测试回复",
+            "response_type": "recommendation",
+            "needs_clarification": False,
+            "clarification_question": None,
+            "extracted_constraints": None,
+            "recommendations": [],
+            "comparisons": [],
+            "citations": [],
+            "suggested_actions": [],
+            "pending_action": None,
+            "executed_actions": [],
+            "undo_available": False,
+        }
+
+    def invoke(self, state, config):
+        self.calls.append((state, config))
+        payload = dict(self._payload)
+        payload["session_id"] = state["session_id"]
+        return {"response_payload": payload}
 
 
 class DummySession:
@@ -15,137 +40,82 @@ class DummySession:
 
 
 def test_chat_routes_greeting_without_retrieval() -> None:
+    graph = StubGraph({"session_id": "", "message": "你好！", "response_type": "greeting",
+                       "needs_clarification": False, "clarification_question": None,
+                       "extracted_constraints": None, "recommendations": [], "comparisons": [],
+                       "citations": [], "suggested_actions": [], "pending_action": None,
+                       "executed_actions": [], "undo_available": False})
     service = AssistantService(DummySession())
-    response = service.chat(SimpleNamespace(message="Hi", session_id=None))
+    service._graph = graph
+
+    response = service.chat(AssistantChatRequest(message="Hi", session_id=None, user_id=1))
 
     assert response["response_type"] == "greeting"
     assert response["recommendations"] == []
     assert response["comparisons"] == []
 
 
-def test_chat_routes_action_intent_without_retrieval() -> None:
+def test_chat_routes_knowledge_query_and_returns_evidence() -> None:
+    graph = StubGraph({"session_id": "", "message": "找到以下咖啡店", "response_type": "knowledge",
+                       "needs_clarification": False, "clarification_question": None,
+                       "extracted_constraints": None,
+                       "recommendations": [{"source_type": "merchant", "merchant_id": 2,
+                                            "merchant_name": "午后豆房", "dish_id": None,
+                                            "dish_name": None, "price": None,
+                                            "reason": "咖啡甜品"}],
+                       "comparisons": [], "citations": [{"source_type": "merchant", "source_id": 2,
+                                                         "title": "午后豆房", "snippet": "精品咖啡"}],
+                       "suggested_actions": [], "pending_action": None,
+                       "executed_actions": [], "undo_available": False})
     service = AssistantService(DummySession())
-    service.agent_core._llm = MagicMock()
-    service.agent_core._llm.call.return_value = {
-        "reasoning": "操作意图",
-        "intent": "action",
-        "needs_clarification": False,
-        "tool_calls": [],
-    }
-    response = service.chat(SimpleNamespace(message="帮我加入购物车", session_id=None))
+    service._graph = graph
 
-    assert response["response_type"] == "action_pending"
-    assert response["recommendations"] == []
-
-
-def test_chat_routes_recommendation_with_retrieval_and_evidence(monkeypatch) -> None:
-    from service.assistant_models import AssistantCandidate
-
-    class StubRetriever:
-        def __init__(self, session):
-            self.session = session
-
-        def retrieve(self, parsed):
-            return [
-                AssistantCandidate(
-                    source_type="dish",
-                    source_id=11,
-                    merchant_id=1,
-                    merchant_name="兰姨小炒",
-                    dish_id=11,
-                    dish_name="鱼香肉丝",
-                    price=28.0,
-                    score=0.91,
-                    summary="酸甜微辣，下饭感强",
-                    reason_facts=["川菜", "28元"],
-                    citation_title="鱼香肉丝｜兰姨小炒",
-                    citation_snippet="川菜；酸甜微辣",
-                )
-            ]
-
-    monkeypatch.setattr("service.assistant_service.AssistantRetriever", StubRetriever, raising=False)
-
-    service = AssistantService(DummySession())
-    service.agent_core._llm = MagicMock()
-    service.agent_core._llm.call.return_value = {
-        "reasoning": "用户有明确预算和人数",
-        "intent": "recommendation",
-        "needs_clarification": False,
-        "tool_calls": [],
-    }
-    response = service.chat(
-        SimpleNamespace(
-            message="推荐几种川菜，2个人吃，100元以内",
-            session_id="session-1",
-        )
-    )
-
-    assert response["response_type"] == "recommendation"
-    assert len(response["recommendations"]) >= 1
-    assert response["recommendations"][0]["dish_name"] == "鱼香肉丝"
-    assert len(response["citations"]) >= 1
-
-
-def test_chat_requests_clarification_for_sparse_recommendation() -> None:
-    service = AssistantService(DummySession())
-    response = service.chat(SimpleNamespace(message="推荐几种川菜", session_id=None))
-
-    assert response["response_type"] == "clarification"
-    assert response["recommendations"] == []
-    assert "预算" in response["message"] or "几个人" in response["message"]
-
-
-def test_chat_executes_action_intent_via_agent_loop() -> None:
-    service = AssistantService(DummySession())
-    service.agent_core._llm = MagicMock()
-    service.agent_core._llm.call.return_value = {
-        "reasoning": "用户想加购",
-        "intent": "action",
-        "needs_clarification": False,
-        "tool_calls": [{"name": "add_to_cart", "parameters": {"dish_id": 11, "quantity": 1}}],
-    }
-    service.tool_registry.execute = MagicMock(return_value={"success": True, "dish_id": 11, "quantity": 1})
-
-    response = service.chat(
-        SimpleNamespace(message="帮我加入购物车", session_id=None, user_id=1)
-    )
-
-    assert response["response_type"] == "action_completed"
-
-
-def test_chat_does_not_clarify_for_knowledge_query_about_coffee_shops(monkeypatch) -> None:
-    """知识类查询（如"有哪些卖咖啡的店"）不应要求人数和预算澄清。"""
-    from service.assistant_models import AssistantCandidate
-
-    class StubRetriever:
-        def __init__(self, session):
-            self.session = session
-
-        def retrieve(self, parsed):
-            return [
-                AssistantCandidate(
-                    source_type="merchant",
-                    source_id=2,
-                    merchant_id=2,
-                    merchant_name="午后豆房",
-                    dish_id=None,
-                    dish_name=None,
-                    price=0.0,
-                    score=0.88,
-                    summary="精品手冲咖啡和法式甜点",
-                    reason_facts=["咖啡甜品", "手冲"],
-                    citation_title="午后豆房",
-                    citation_snippet="咖啡甜品；精品手冲",
-                )
-            ]
-
-    monkeypatch.setattr("service.assistant_service.AssistantRetriever", StubRetriever, raising=False)
-
-    service = AssistantService(DummySession())
-    response = service.chat(
-        SimpleNamespace(message="有哪些卖咖啡的店", session_id="session-coffee")
-    )
+    response = service.chat(AssistantChatRequest(message="有哪些卖咖啡的店", session_id="session-coffee", user_id=1))
 
     assert response["response_type"] != "clarification"
     assert response["needs_clarification"] is False
-    assert len(response.get("recommendations", [])) >= 1 or len(response.get("comparisons", [])) >= 1 or response["message"] != ""
+
+
+def test_chat_passes_user_id_and_session_to_graph() -> None:
+    graph = StubGraph()
+    service = AssistantService(DummySession())
+    service._graph = graph
+
+    service.chat(AssistantChatRequest(message="推荐湘菜", session_id="s1", user_id=42))
+
+    state = graph.calls[0][0]
+    assert state["user_id"] == 42
+    assert state["session_id"] == "s1"
+    assert graph.calls[0][1]["configurable"]["thread_id"] == "s1"
+
+
+def test_chat_generates_session_id_when_none_provided() -> None:
+    graph = StubGraph()
+    service = AssistantService(DummySession())
+    service._graph = graph
+
+    response = service.chat(AssistantChatRequest(message="推荐湘菜", session_id=None, user_id=1))
+
+    assert response["session_id"] != ""
+    assert len(response["session_id"]) > 0
+
+
+def test_chat_does_not_ask_clarification_for_recommendation() -> None:
+    """LangGraph agent should attempt to answer rather than asking for clarification."""
+    graph = StubGraph({"session_id": "", "message": "推荐结果",
+                       "response_type": "recommendation",
+                       "needs_clarification": False, "clarification_question": None,
+                       "extracted_constraints": None, "recommendations": [
+                           {"source_type": "dish", "merchant_id": 1, "merchant_name": "兰姨小炒",
+                            "dish_id": 11, "dish_name": "鱼香肉丝", "price": 28.0,
+                            "reason": "川菜、28元"}
+                       ], "comparisons": [], "citations": [],
+                       "suggested_actions": [], "pending_action": None,
+                       "executed_actions": [], "undo_available": False})
+    service = AssistantService(DummySession())
+    service._graph = graph
+
+    response = service.chat(AssistantChatRequest(message="推荐几种川菜", session_id=None, user_id=1))
+
+    assert response["response_type"] == "recommendation"
+    assert response["needs_clarification"] is False

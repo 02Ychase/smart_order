@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
+import logging
+
 from langchain_core.messages import AIMessage, HumanMessage
 
 from service.agent_runtime.planner import ACTION_TOOL_NAMES, RAG_TOOL_NAMES, LangGraphAgentPlanner
 from service.rag.retriever import AdvancedRagRetriever
+
+logger = logging.getLogger(__name__)
 
 
 def latest_user_message(state: dict) -> str:
@@ -24,8 +29,14 @@ def memory_writer_node(state: dict, memory_service=None) -> dict:
     user_id = state.get("user_id")
     if user_id is None or memory_service is None:
         return {"saved_memories": []}
+
+    candidates = list(state.get("memory_candidates") or [])
+
+    if not candidates:
+        candidates = _extract_memory_candidates(state)
+
     saved = []
-    for candidate in state.get("memory_candidates", []):
+    for candidate in candidates:
         if float(candidate.get("confidence", 0.0)) < 0.75:
             continue
         saved.append(
@@ -39,6 +50,32 @@ def memory_writer_node(state: dict, memory_service=None) -> dict:
     return {"saved_memories": saved}
 
 
+def _extract_memory_candidates(state: dict) -> list[dict]:
+    conversation = _format_conversation_for_memory(state.get("messages", []))
+    if not conversation.strip():
+        return []
+
+    try:
+        from service.agent_runtime.prompts import PromptRegistry
+        from tools.llm_tool import call_llm
+
+        memory_prompt = PromptRegistry().load("agent.memory_writer")
+        raw = call_llm(query=conversation, system_instruction=memory_prompt)
+        parsed = json.loads(_clean_json(raw))
+        return parsed.get("memories", [])
+    except Exception:
+        logger.warning("Memory extraction via LLM failed, skipping", exc_info=True)
+        return []
+
+
+def _format_conversation_for_memory(messages: list) -> str:
+    parts = []
+    for msg in messages[-6:]:
+        role = "用户" if isinstance(msg, HumanMessage) else "助手"
+        parts.append(f"{role}: {msg.content}")
+    return "\n".join(parts)
+
+
 def plan_node(state: dict, planner: LangGraphAgentPlanner) -> dict:
     user_message = latest_user_message(state)
     plan = planner.plan(
@@ -48,6 +85,9 @@ def plan_node(state: dict, planner: LangGraphAgentPlanner) -> dict:
             "user_id": state.get("user_id"),
             "loaded_user_memories": state.get("loaded_user_memories", []),
             "recent_action_ids": state.get("recent_action_ids", []),
+            "iteration_count": state.get("iteration_count", 0),
+            "recent_evidence": state.get("recent_evidence", []),
+            "tool_results": state.get("tool_results", []),
         },
     )
     return {"current_plan": plan}
@@ -56,14 +96,54 @@ def plan_node(state: dict, planner: LangGraphAgentPlanner) -> dict:
 def route_after_plan(state: dict) -> str:
     plan = state.get("current_plan")
     if plan is None:
+        logger.debug("Agent route: no plan → respond")
         return "respond"
+
+    has_evidence = bool(state.get("recent_evidence"))
+    if has_evidence and plan.intent in {"recommendation", "knowledge"}:
+        logger.debug("Agent route: evidence already present, intent=%s → respond", plan.intent)
+        return "respond"
+
     if plan.intent == "undo_action":
+        logger.debug("Agent route: undo_action → undo")
         return "undo"
     if plan.requires_rag or any(call.tool_name in RAG_TOOL_NAMES for call in plan.tool_calls):
+        logger.debug("Agent route: intent=%s requires_rag=%s → rag", plan.intent, plan.requires_rag)
         return "rag"
     if any(call.tool_name in ACTION_TOOL_NAMES for call in plan.tool_calls):
+        logger.debug("Agent route: action tool → action")
         return "action"
+    logger.debug("Agent route: intent=%s → respond", plan.intent)
     return "respond"
+
+
+def evaluate_node(state: dict) -> dict:
+    iteration = state.get("iteration_count", 0) + 1
+    max_iter = state.get("max_iterations", 2)
+    logger.debug("Agent evaluate: iteration=%d/%d", iteration, max_iter)
+
+    if iteration >= max_iter:
+        logger.debug("Agent evaluate: max iterations reached → write_memory")
+        return {"iteration_count": iteration, "_next": "respond"}
+
+    plan = state.get("current_plan")
+    has_evidence = bool(state.get("recent_evidence"))
+    has_tool_results = bool(state.get("tool_results"))
+
+    if has_evidence and plan and plan.intent == "recommendation":
+        logger.debug("Agent evaluate: evidence collected → write_memory")
+        return {"iteration_count": iteration, "_next": "respond"}
+
+    if has_tool_results:
+        logger.debug("Agent evaluate: action completed → write_memory")
+        return {"iteration_count": iteration, "_next": "respond"}
+
+    logger.debug("Agent evaluate: looping back → plan")
+    return {"iteration_count": iteration, "_next": "plan"}
+
+
+def route_after_evaluate(state: dict) -> str:
+    return state.get("_next", "respond")
 
 
 def rag_node(state: dict, retriever: AdvancedRagRetriever) -> dict:
@@ -198,59 +278,23 @@ def _normalize_tool_result(result: dict, state: dict) -> dict:
     }
 
 
-def respond_node(state: dict) -> dict:
+def respond_node(state: dict, use_llm: bool = True) -> dict:
     plan = state.get("current_plan")
     evidence = state.get("recent_evidence", [])
     response_type = _external_response_type(plan, state)
-    recommendations = []
-    citations = []
-    for item in evidence:
-        facts = item.get("facts", {})
-        if item.get("source_type") == "dish":
-            recommendations.append(
-                {
-                    "source_type": "dish",
-                    "merchant_id": item.get("merchant_id"),
-                    "merchant_name": facts.get("merchant_name", ""),
-                    "dish_id": facts.get("dish_id"),
-                    "dish_name": facts.get("dish_name"),
-                    "price": facts.get("price"),
-                    "reason": "、".join(item.get("why_matched", [])),
-                }
-            )
-        elif item.get("source_type") == "merchant":
-            merchant_id = item.get("merchant_id") or facts.get("merchant_id") or facts.get("id") or 0
-            merchant_name = facts.get("merchant_name") or facts.get("name") or item.get("title") or ""
-            recommendations.append(
-                {
-                    "source_type": "merchant",
-                    "merchant_id": merchant_id,
-                    "merchant_name": merchant_name,
-                    "dish_id": None,
-                    "dish_name": None,
-                    "price": None,
-                    "reason": "、".join(item.get("why_matched", [])),
-                }
-            )
-        citations.append(
-            {
-                "source_type": item.get("source_type"),
-                "source_id": item.get("source_id"),
-                "title": item.get("title"),
-                "snippet": item.get("citation", ""),
-            }
-        )
+    user_message = latest_user_message(state)
 
+    recommendations, citations = _build_structured_data(evidence)
     tool_results = state.get("tool_results", [])
-    if recommendations:
-        message = "结合商家数据和匹配理由，我推荐：\n" + "\n".join(
-            _recommendation_line(index, item)
-            for index, item in enumerate(recommendations, start=1)
-        )
+
+    if evidence and use_llm:
+        message = _generate_llm_response(user_message, response_type, evidence)
+    elif evidence:
+        message = _template_recommendation(recommendations)
     elif tool_results:
         message = tool_results[0].get("message", "操作已完成")
     elif response_type == "greeting":
-        message = "你好！我是你的智能点餐助手。"
+        message = "你好！我是你的智能点餐助手，可以帮你推荐菜品、查找商家信息、管理购物车。"
     else:
         message = "我没有找到足够匹配的结果，可以换个说法再试。"
 
@@ -275,10 +319,84 @@ def respond_node(state: dict) -> dict:
     }
 
 
-def _recommendation_line(index: int, item: dict) -> str:
-    if item.get("source_type") == "merchant":
-        return f"{index}. {item['merchant_name']}"
-    return f"{index}. {item['dish_name']}（{item['merchant_name']}）"
+def _build_structured_data(evidence: list[dict]) -> tuple[list[dict], list[dict]]:
+    recommendations = []
+    citations = []
+    for item in evidence:
+        facts = item.get("facts", {})
+        if item.get("source_type") == "dish":
+            recommendations.append({
+                "source_type": "dish",
+                "merchant_id": item.get("merchant_id"),
+                "merchant_name": facts.get("merchant_name", ""),
+                "dish_id": facts.get("dish_id"),
+                "dish_name": facts.get("dish_name"),
+                "price": facts.get("price"),
+                "reason": "、".join(item.get("why_matched", [])),
+            })
+        elif item.get("source_type") == "merchant":
+            merchant_id = item.get("merchant_id") or facts.get("merchant_id") or facts.get("id") or 0
+            merchant_name = facts.get("merchant_name") or facts.get("name") or item.get("title") or ""
+            recommendations.append({
+                "source_type": "merchant",
+                "merchant_id": merchant_id,
+                "merchant_name": merchant_name,
+                "dish_id": None,
+                "dish_name": None,
+                "price": None,
+                "reason": "、".join(item.get("why_matched", [])),
+            })
+        citations.append({
+            "source_type": item.get("source_type"),
+            "source_id": item.get("source_id"),
+            "title": item.get("title"),
+            "snippet": item.get("citation", ""),
+        })
+    return recommendations, citations
+
+
+def _generate_llm_response(user_message: str, response_type: str, evidence: list[dict]) -> str:
+    try:
+        from service.agent_runtime.prompts import PromptRegistry
+        from tools.llm_tool import call_llm
+
+        evidence_text = _format_evidence_for_llm(evidence)
+        system_prompt = PromptRegistry().load("agent.answer_grounded")
+        prompt = f"用户消息：{user_message}\n意图：{response_type}\n\n检索到的证据：\n{evidence_text}\n\n请基于证据生成自然回复。"
+        return call_llm(query=prompt, system_instruction=system_prompt)
+    except Exception:
+        logger.warning("LLM response generation failed, falling back to template", exc_info=True)
+        recommendations, _ = _build_structured_data(evidence)
+        return _template_recommendation(recommendations)
+
+
+def _format_evidence_for_llm(evidence: list[dict]) -> str:
+    lines = []
+    for i, item in enumerate(evidence, 1):
+        facts = item.get("facts", {})
+        if item.get("source_type") == "dish":
+            lines.append(
+                f"{i}. 菜品：{facts.get('dish_name', '')}（{facts.get('merchant_name', '')}）"
+                f" - 价格：{facts.get('price', '')}元"
+                f" - 特色：{facts.get('flavor_profile', '')}"
+                f" - 匹配原因：{'、'.join(item.get('why_matched', []))}"
+            )
+        else:
+            lines.append(
+                f"{i}. 商家：{facts.get('merchant_name', facts.get('name', ''))}"
+                f" - 简介：{item.get('citation', '')}"
+            )
+    return "\n".join(lines)
+
+
+def _template_recommendation(recommendations: list[dict]) -> str:
+    lines = ["结合商家数据，为你找到以下推荐："]
+    for index, item in enumerate(recommendations, start=1):
+        if item.get("source_type") == "merchant":
+            lines.append(f"{index}. {item['merchant_name']}")
+        else:
+            lines.append(f"{index}. {item['dish_name']}（{item['merchant_name']}）- {item.get('reason', '')}")
+    return "\n".join(lines)
 
 
 def _external_response_type(plan, state: dict) -> str:
@@ -292,3 +410,14 @@ def _external_response_type(plan, state: dict) -> str:
     }:
         return "action_completed"
     return plan.intent
+
+
+def _clean_json(raw: str) -> str:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = text.replace("```json", "").replace("```", "").strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        return text[start:end + 1]
+    return text

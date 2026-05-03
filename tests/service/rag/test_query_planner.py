@@ -14,9 +14,12 @@ def test_query_planner_generates_expansion_queries_for_spicy_hunan() -> None:
     plan = planner.plan("帮我推荐几个比较辣的湘菜", agent_plan, memories=[])
 
     assert plan.normalized_query == "辣的湘菜"
-    assert "湘菜 香辣 下饭" in plan.expansion_queries
+    assert "辣的湘菜" in plan.expansion_queries
+    assert "帮我推荐几个比较辣的湘菜" in plan.expansion_queries
     assert plan.source_types == ["dish"]
     assert plan.should_filters["cuisine_types"] == ["湘菜"]
+    assert plan.should_filters["flavor_preferences"] == ["辣"]
+    assert "湘菜" in plan.must_filters["cuisine_types"]
 
 
 def test_query_planner_routes_merchant_knowledge_queries_to_merchants() -> None:

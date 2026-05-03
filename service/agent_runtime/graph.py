@@ -5,11 +5,13 @@ from langgraph.graph import END, StateGraph
 
 from service.agent_runtime.nodes import (
     action_node,
+    evaluate_node,
     load_memory_node,
     memory_writer_node,
     plan_node,
     rag_node,
     respond_node,
+    route_after_evaluate,
     route_after_plan,
     undo_node,
 )
@@ -24,6 +26,8 @@ def build_agent_graph(
     action_executor=None,
     memory_service=None,
     checkpointer=None,
+    use_llm_response: bool = True,
+    max_iterations: int = 3,
 ):
     planner = planner or LangGraphAgentPlanner()
     retriever = retriever or AdvancedRagRetriever()
@@ -35,7 +39,8 @@ def build_agent_graph(
     workflow.add_node("rag", lambda state: rag_node(state, retriever))
     workflow.add_node("action", lambda state: action_node(state, action_executor))
     workflow.add_node("undo", lambda state: undo_node(state, action_executor))
-    workflow.add_node("respond", respond_node)
+    workflow.add_node("evaluate", evaluate_node)
+    workflow.add_node("respond", lambda state: respond_node(state, use_llm=use_llm_response))
     workflow.add_node("write_memory", lambda state: memory_writer_node(state, memory_service))
 
     workflow.set_entry_point("load_memory")
@@ -50,9 +55,20 @@ def build_agent_graph(
             "respond": "respond",
         },
     )
-    workflow.add_edge("rag", "respond")
-    workflow.add_edge("action", "respond")
-    workflow.add_edge("undo", "respond")
+
+    workflow.add_edge("rag", "evaluate")
+    workflow.add_edge("action", "evaluate")
+    workflow.add_edge("undo", "evaluate")
+
+    workflow.add_conditional_edges(
+        "evaluate",
+        route_after_evaluate,
+        {
+            "plan": "plan",
+            "respond": "respond",
+        },
+    )
+
     workflow.add_edge("respond", "write_memory")
     workflow.add_edge("write_memory", END)
     return workflow.compile(checkpointer=checkpointer)

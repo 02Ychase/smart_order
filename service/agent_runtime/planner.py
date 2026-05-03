@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from typing import Any
@@ -8,6 +9,8 @@ from typing import Any
 from service.agent_runtime.prompts import PromptRegistry
 from service.agent_runtime.state import AgentPlan, GraphToolCall
 from tools.llm_tool import call_llm
+
+logger = logging.getLogger(__name__)
 
 
 RAG_TOOL_NAMES = {"recommend_dishes", "search_catalog"}
@@ -40,6 +43,7 @@ class LangGraphAgentPlanner:
                 raw = self._llm.call(user_message, self.prompts.load("agent.planner"))
                 return self._apply_user_message_hints(self._parse(raw), user_message)
             except Exception:
+                logger.warning("Planner LLM call failed, falling back to rule-based plan", exc_info=True)
                 return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
 
         if self._model_name:
@@ -50,8 +54,10 @@ class LangGraphAgentPlanner:
                 )
                 return self._apply_user_message_hints(self._parse(raw), user_message)
             except Exception:
+                logger.warning("Planner LLM call failed, falling back to rule-based plan", exc_info=True)
                 return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
 
+        logger.info("No LLM configured, using rule-based planner")
         return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
 
     def _parse(self, raw: str | dict[str, Any]) -> AgentPlan:

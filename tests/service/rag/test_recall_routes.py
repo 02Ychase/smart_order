@@ -11,6 +11,19 @@ class StubCatalogService:
             {"id": 11, "merchant_id": 1, "name": "小炒黄牛肉", "price": 42.0, "cuisine_type": "湘菜", "flavor_profile": "鲜辣下饭", "allergens": [], "is_recommended": True, "is_available": True}
         ]
 
+    def list_dishes_filtered(self, cuisine_types=None, flavor_keywords=None, required_keywords=None, forbidden_keywords=None, merchant_id=None, limit=100):
+        return [
+            {"id": 11, "merchant_id": 1, "name": "小炒黄牛肉", "price": 42.0, "cuisine_type": "湘菜", "flavor_profile": "鲜辣下饭", "allergens": [], "is_recommended": True, "is_available": True, "description": "黄牛肉片现炒"}
+        ]
+
+    def list_merchants_filtered(self, cuisine_types=None, required_keywords=None, limit=50):
+        return [{"id": 1, "name": "兰姨小炒", "rating": 4.7, "merchant_tags": ["湘菜"], "business_hours": "10:00-21:30", "description": "地道湘菜馆"}]
+
+    def list_recommended_dishes(self, limit=50):
+        return [
+            {"id": 11, "merchant_id": 1, "name": "小炒黄牛肉", "price": 42.0, "cuisine_type": "湘菜", "flavor_profile": "鲜辣下饭", "allergens": [], "is_recommended": True, "is_available": True, "description": "黄牛肉片现炒"}
+        ]
+
 
 def test_sql_recall_returns_dish_candidates_for_cuisine_and_flavor() -> None:
     plan = RagQueryPlan(

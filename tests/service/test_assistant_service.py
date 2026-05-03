@@ -1,70 +1,88 @@
 from pathlib import Path
 import sys
-from types import SimpleNamespace
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from service.assistant_models import AssistantCandidate
+from api.schemas import AssistantChatRequest
 from service.assistant_service import AssistantService, build_assistant_health
+
+
+class StubGraph:
+    def __init__(self, response_payload=None):
+        self.calls = []
+        self._payload = response_payload or {
+            "session_id": "",
+            "message": "",
+            "response_type": "recommendation",
+            "needs_clarification": False,
+            "clarification_question": None,
+            "extracted_constraints": None,
+            "recommendations": [],
+            "comparisons": [],
+            "citations": [],
+            "suggested_actions": [],
+            "pending_action": None,
+            "executed_actions": [],
+            "undo_available": False,
+        }
+
+    def invoke(self, state, config):
+        self.calls.append((state, config))
+        payload = dict(self._payload)
+        payload["session_id"] = state["session_id"]
+        return {"response_payload": payload}
 
 
 class DummySession:
     pass
 
 
-def test_assistant_service_returns_clarification_before_retrieval(monkeypatch) -> None:
-    retrieve_called = {"value": False}
-
-    class StubRetriever:
-        def __init__(self, session):
-            self.session = session
-
-        def retrieve(self, parsed):
-            retrieve_called["value"] = True
-            return []
-
-    monkeypatch.setattr("service.assistant_service.AssistantRetriever", StubRetriever, raising=False)
-
+def test_assistant_service_does_not_clarify_for_recommendation() -> None:
+    """LangGraph agent attempts to answer directly, rather than asking for clarification."""
+    graph = StubGraph({"session_id": "", "message": "我推荐以下川菜...",
+                       "response_type": "recommendation",
+                       "needs_clarification": False, "clarification_question": None,
+                       "extracted_constraints": None, "recommendations": [],
+                       "comparisons": [], "citations": [],
+                       "suggested_actions": [], "pending_action": None,
+                       "executed_actions": [], "undo_available": False})
     service = AssistantService(DummySession())
-    response = service.chat(SimpleNamespace(message="推荐几种川菜", session_id=None))
+    service._graph = graph
 
-    assert response["response_type"] == "clarification"
-    assert response["needs_clarification"] is True
-    assert retrieve_called["value"] is False
+    response = service.chat(AssistantChatRequest(message="推荐几种川菜", session_id=None, user_id=1))
+
+    assert response["response_type"] == "recommendation"
+    assert response["needs_clarification"] is False
 
 
-def test_assistant_service_returns_grounded_dish_recommendations(monkeypatch) -> None:
-    class StubRetriever:
-        def __init__(self, session):
-            self.session = session
-
-        def retrieve(self, parsed):
-            return [
-                AssistantCandidate(
-                    source_type="dish",
-                    source_id=11,
-                    merchant_id=1,
-                    merchant_name="兰姨小炒",
-                    dish_id=11,
-                    dish_name="鱼香肉丝",
-                    price=28.0,
-                    score=0.91,
-                    summary="酸甜微辣，下饭感强，适合两人晚餐",
-                    reason_facts=["川菜", "28元", "不含花生"],
-                    citation_title="鱼香肉丝｜兰姨小炒",
-                    citation_snippet="川菜；酸甜微辣；配料为猪里脊、木耳、胡萝卜、青椒",
-                )
-            ]
-
-    monkeypatch.setattr("service.assistant_service.AssistantRetriever", StubRetriever, raising=False)
-
+def test_assistant_service_returns_grounded_dish_recommendations() -> None:
+    graph = StubGraph({"session_id": "session-1",
+                       "message": "推荐结果",
+                       "response_type": "recommendation",
+                       "needs_clarification": False, "clarification_question": None,
+                       "extracted_constraints": None,
+                       "recommendations": [
+                           {"source_type": "dish", "merchant_id": 1, "merchant_name": "兰姨小炒",
+                            "dish_id": 11, "dish_name": "鱼香肉丝", "price": 28.0,
+                            "reason": "川菜、28元、不含花生"}
+                       ],
+                       "comparisons": [], "citations": [
+                           {"source_type": "dish", "source_id": 11,
+                            "title": "鱼香肉丝｜兰姨小炒",
+                            "snippet": "川菜；酸甜微辣"}
+                       ],
+                       "suggested_actions": [], "pending_action": None,
+                       "executed_actions": [], "undo_available": False})
     service = AssistantService(DummySession())
+    service._graph = graph
+
     response = service.chat(
-        SimpleNamespace(
+        AssistantChatRequest(
             message="推荐几种川菜，2个人吃，100元以内，不要花生",
             session_id="session-1",
+            user_id=1,
         )
     )
 
