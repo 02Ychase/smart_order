@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from service.catalog_service import CatalogService
 from service.rag.models import RagQueryPlan, RecallCandidate
 from tools.assistant_vector_store import AssistantVectorStore
@@ -131,28 +133,240 @@ class BusinessRecallRoute:
 
     def recall(self, plan: RagQueryPlan, limit: int) -> list[RecallCandidate]:
         candidates = []
-        rank = 1
         dishes = self.catalog_service.list_recommended_dishes(limit=max(limit, 30))
+
+        merchant_cache: dict[int, dict | None] = {}
+
+        def _get_merchant(merchant_id: int) -> dict | None:
+            if merchant_id not in merchant_cache:
+                merchant_cache[merchant_id] = self.catalog_service.get_merchant(merchant_id)
+            return merchant_cache[merchant_id]
+
+        normalized_query = (plan.normalized_query or "").lower()
+
         for dish in dishes:
+            merchant_id = dish["merchant_id"]
+            merchant = _get_merchant(merchant_id)
+
+            merchant_name = merchant["name"] if merchant else ""
+            merchant_rating = float(merchant.get("rating", 0.0)) if merchant else 0.0
+
+            base_score = 0.7
+            rating_bonus = (merchant_rating / 5.0) * 0.2
+
+            query_relevance = 0.0
+            dish_name = dish.get("name", "").lower()
+            dish_tags = " ".join(dish.get("tags", [])).lower()
+            merchant_name_lower = merchant_name.lower()
+
+            if normalized_query:
+                query_words = normalized_query.split()
+                for word in query_words:
+                    if word and (word in dish_name or word in dish_tags or word in merchant_name_lower):
+                        query_relevance = 0.1
+                        break
+
+            final_score = min(base_score + rating_bonus + query_relevance, 1.0)
+
             candidates.append(
                 RecallCandidate(
                     stable_key=f"dish:{dish['id']}",
                     source_type="dish",
                     source_id=dish["id"],
                     route="business",
-                    rank=rank,
-                    score=0.7,
+                    rank=len(candidates) + 1,
+                    score=final_score,
                     facts={
                         **dish,
                         "dish_id": dish["id"],
                         "dish_name": dish["name"],
                         "merchant_id": dish["merchant_id"],
-                        "merchant_name": "",
-                        "merchant_rating": 0.0,
+                        "merchant_name": merchant_name,
+                        "merchant_rating": merchant_rating,
                         "is_available": True,
                     },
                     citation=dish.get("description", ""),
                 )
             )
-            rank += 1
+
         return candidates[:limit]
+
+
+class SparseVectorRecallRoute:
+    """BM25 sparse-vector recall that activates the reranker's lexical_score weight.
+
+    Indexes dish/merchant names, descriptions, and categories using character
+    bigrams (effective for Chinese without a segmenter).  Scores documents with
+    the BM25 ranking function.
+    """
+
+    _BM25_K1: float = 1.2
+    _BM25_B: float = 0.75
+
+    def __init__(self, catalog_service: CatalogService) -> None:
+        self.catalog_service = catalog_service
+        self._docs: list[dict] = []
+        self._doc_tokens: list[list[str]] = []
+        self._doc_lengths: list[int] = []
+        self._avgdl: float = 0.0
+        self._df: dict[str, int] = {}
+        self._N: int = 0
+        self._built: bool = False
+
+    # ── index ────────────────────────────────────────────────────────
+
+    def build_index(self) -> None:
+        """Build in-memory BM25 index from all catalog data."""
+        docs: list[dict] = []
+
+        for merchant in self.catalog_service.list_merchants():
+            docs.append({
+                "text": self._merchant_text(merchant),
+                "source_type": "merchant",
+                "source_id": merchant["id"],
+                "facts": {
+                    **merchant,
+                    "merchant_id": merchant["id"],
+                    "merchant_name": merchant["name"],
+                    "is_available": True,
+                },
+                "citation": merchant.get("description", ""),
+            })
+
+        for merchant in self.catalog_service.list_merchants():
+            for dish in self.catalog_service.list_dishes_by_merchant(merchant["id"]):
+                docs.append({
+                    "text": self._dish_text(dish),
+                    "source_type": "dish",
+                    "source_id": dish["id"],
+                    "facts": {
+                        **dish,
+                        "dish_id": dish["id"],
+                        "dish_name": dish["name"],
+                        "merchant_id": dish["merchant_id"],
+                        "merchant_name": merchant["name"],
+                        "merchant_rating": float(merchant.get("rating", 0.0)),
+                        "is_available": dish.get("is_available", True),
+                    },
+                    "citation": dish.get("description", ""),
+                })
+
+        if not docs:
+            self._docs, self._doc_tokens, self._doc_lengths = [], [], []
+            self._N, self._avgdl, self._df = 0, 0.0, {}
+            self._built = True
+            return
+
+        self._docs = docs
+        self._doc_tokens = [self._tokenize(d["text"]) for d in docs]
+        self._doc_lengths = [len(t) for t in self._doc_tokens]
+        self._N = len(docs)
+        self._avgdl = sum(self._doc_lengths) / max(self._N, 1)
+
+        self._df = {}
+        for tokens in self._doc_tokens:
+            for token in set(tokens):
+                self._df[token] = self._df.get(token, 0) + 1
+
+        self._built = True
+
+    # ── recall ──────────────────────────────────────────────────────
+
+    def recall(self, plan: RagQueryPlan, limit: int) -> list[RecallCandidate]:
+        if not self._built:
+            self.build_index()
+
+        if self._N == 0:
+            return []
+
+        source_types = set(plan.source_types)
+        queries = list(plan.expansion_queries) if plan.expansion_queries else [plan.normalized_query]
+        if not queries:
+            return []
+
+        doc_scores: list[float] = [0.0] * self._N
+        doc_tokens_cache = [self._tokenize(q) for q in queries]
+
+        for query_tokens in doc_tokens_cache:
+            if not query_tokens:
+                continue
+            for doc_idx, doc in enumerate(self._docs):
+                if doc["source_type"] not in source_types:
+                    continue
+                score = self._bm25_score(query_tokens, doc_idx)
+                if score > doc_scores[doc_idx]:
+                    doc_scores[doc_idx] = score
+
+        max_score = max(doc_scores) if doc_scores else 0.0
+        if max_score > 0:
+            doc_scores = [s / max_score for s in doc_scores]
+
+        indexed = [(score, idx) for idx, score in enumerate(doc_scores) if score > 0]
+        indexed.sort(key=lambda item: item[0], reverse=True)
+
+        candidates: list[RecallCandidate] = []
+        for rank, (score, doc_idx) in enumerate(indexed[:limit], 1):
+            doc = self._docs[doc_idx]
+            candidates.append(RecallCandidate(
+                stable_key=f"{doc['source_type']}:{doc['source_id']}",
+                source_type=doc["source_type"],
+                source_id=doc["source_id"],
+                route="sparse",
+                rank=rank,
+                score=score,
+                facts=dict(doc["facts"]),
+                citation=doc["citation"],
+            ))
+        return candidates
+
+    # ── scoring ─────────────────────────────────────────────────────
+
+    def _bm25_score(self, query_tokens: list[str], doc_idx: int) -> float:
+        """BM25 with Robertson-Sparck Jones smoothed IDF."""
+        doc_len = self._doc_lengths[doc_idx]
+        doc_tokens = self._doc_tokens[doc_idx]
+        score = 0.0
+
+        for token in query_tokens:
+            df = self._df.get(token, 0)
+            if df == 0:
+                continue
+            idf = math.log((self._N - df + 0.5) / (df + 0.5) + 1.0)
+            tf = doc_tokens.count(token)
+            numerator = tf * (self._BM25_K1 + 1)
+            denominator = tf + self._BM25_K1 * (1 - self._BM25_B + self._BM25_B * doc_len / self._avgdl)
+            score += idf * numerator / denominator
+
+        q_len = len(query_tokens)
+        return score / q_len if q_len else 0.0
+
+    # ── helpers ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _tokenize(text: str) -> list[str]:
+        """Character bigrams — suitable for Chinese without a segmenter."""
+        if not text or len(text) < 2:
+            return list(text) if text else []
+        bigrams = [text[i : i + 2] for i in range(len(text) - 1)]
+        bigrams.extend(list(text))  # unigrams catch single-character queries
+        return bigrams
+
+    @staticmethod
+    def _merchant_text(merchant: dict) -> str:
+        return " ".join(filter(None, [
+            str(merchant.get("name", "")),
+            str(merchant.get("description", "")),
+            str(merchant.get("homepage_category", "")),
+            " ".join(merchant.get("merchant_tags", [])),
+        ]))
+
+    @staticmethod
+    def _dish_text(dish: dict) -> str:
+        return " ".join(filter(None, [
+            str(dish.get("name", "")),
+            str(dish.get("description", "")),
+            str(dish.get("cuisine_type", "")),
+            str(dish.get("flavor_profile", "")),
+            " ".join(dish.get("tags", [])),
+            " ".join(dish.get("ingredients", [])),
+        ]))

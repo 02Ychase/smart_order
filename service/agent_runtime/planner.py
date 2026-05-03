@@ -7,8 +7,9 @@ import re
 from typing import Any
 
 from service.agent_runtime.prompts import PromptRegistry
+from service.agent_runtime.schemas import AgentPlanSchema, FiltersSchema, GraphToolCallSchema
 from service.agent_runtime.state import AgentPlan, GraphToolCall
-from tools.llm_tool import call_llm
+from tools.llm_tool import call_llm_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +37,39 @@ class LangGraphAgentPlanner:
         self.prompts = prompts or PromptRegistry()
         self._model_name = os.getenv("MODEL_NAME")
         self._llm = None
+        self._structured_llm = None
+
+        if self._model_name:
+            try:
+                from langchain.chat_models import init_chat_model
+
+                llm = init_chat_model(model=self._model_name, model_provider="openai")
+                self._structured_llm = llm.with_structured_output(AgentPlanSchema)
+            except Exception:
+                logger.warning(
+                    "Failed to initialize structured output LLM for model=%s, will fall back",
+                    self._model_name,
+                    exc_info=True,
+                )
 
     def plan(self, user_message: str, context: dict[str, Any]) -> AgentPlan:
+        # 1. Structured output path (production, primary)
+        if self._structured_llm is not None:
+            try:
+                schema_result = self._structured_llm.invoke([
+                    ("system", self.prompts.load("agent.planner")),
+                    ("human", user_message),
+                ])
+                plan = self._schema_to_plan(schema_result)
+                return self._apply_user_message_hints(plan, user_message)
+            except Exception:
+                logger.warning(
+                    "Planner structured LLM call failed, falling back",
+                    exc_info=True,
+                )
+            # Fall through to legacy path
+
+        # 2. Legacy path (external stub LLM for testing, backward compat)
         if self._llm is not None:
             try:
                 raw = self._llm.call(user_message, self.prompts.load("agent.planner"))
@@ -46,9 +78,10 @@ class LangGraphAgentPlanner:
                 logger.warning("Planner LLM call failed, falling back to rule-based plan", exc_info=True)
                 return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
 
+        # 3. Direct call_llm_with_retry path (fallback when _structured_llm init failed but _model_name exists)
         if self._model_name:
             try:
-                raw = call_llm(
+                raw = call_llm_with_retry(
                     query=json.dumps({"message": user_message, "context": context}, ensure_ascii=False),
                     system_instruction=self.prompts.load("agent.planner"),
                 )
@@ -57,8 +90,47 @@ class LangGraphAgentPlanner:
                 logger.warning("Planner LLM call failed, falling back to rule-based plan", exc_info=True)
                 return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
 
+        # 4. No LLM configured
         logger.info("No LLM configured, using rule-based planner")
         return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
+
+    def _schema_to_plan(self, schema: AgentPlanSchema) -> AgentPlan:
+        """Convert a Pydantic AgentPlanSchema to the AgentPlan dataclass.
+
+        Applies the same post-processing as _parse(): normalizes tool names,
+        merges read tool arguments, enforces requires_rag for certain intents,
+        and validates writes_database.
+        """
+        intent = schema.intent or "unsupported"
+        filters = self._default_filters()
+        schema_filters = schema.filters
+        if schema_filters:
+            for key in self._default_filters():
+                value = getattr(schema_filters, key, None)
+                if value is not None:
+                    filters[key] = value
+
+        raw_calls = [item.model_dump() for item in (schema.tool_calls or [])]
+        tool_calls = self._parse_tool_calls(raw_calls, intent)
+        normalized_query = str(schema.normalized_query or "")
+        normalized_query = self._merge_read_tool_arguments(
+            filters=filters,
+            tool_calls=tool_calls,
+            normalized_query=normalized_query,
+        )
+        requires_rag = self._parse_bool(schema.requires_rag)
+        if intent in {"recommendation", "knowledge"} or any(call.tool_name in RAG_TOOL_NAMES for call in tool_calls):
+            requires_rag = True
+
+        return AgentPlan(
+            intent=intent,
+            normalized_query=normalized_query,
+            requires_rag=requires_rag,
+            filters=filters,
+            tool_calls=tool_calls,
+            should_answer_directly=self._parse_bool(schema.should_answer_directly),
+            response_hint=schema.response_hint or "",
+        )
 
     def _parse(self, raw: str | dict[str, Any]) -> AgentPlan:
         parsed = raw if isinstance(raw, dict) else json.loads(self._clean_json(raw))

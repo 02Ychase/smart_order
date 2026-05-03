@@ -100,3 +100,6 @@ class CatalogRepository:
                     | Merchant.homepage_category.contains(kw)
                 )
         return list(self.session.scalars(statement.limit(limit)))
+
+    def get_merchant(self, merchant_id: int) -> Merchant | None:
+        return self.session.get(Merchant, merchant_id)

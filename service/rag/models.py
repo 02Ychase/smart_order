@@ -16,6 +16,8 @@ class RagQueryPlan:
     should_filters: dict[str, Any] = field(default_factory=dict)
     source_types: list[SourceType] = field(default_factory=lambda: ["dish", "merchant"])
     answer_mode: str = "recommendation"
+    preferred_dishes: list[str] = field(default_factory=list)
+    preferred_merchants: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -4,6 +4,8 @@ from pathlib import Path
 
 
 class PromptRegistry:
+    _cache: dict[str, str] = {}
+
     def __init__(self, project_root: Path | None = None) -> None:
         self.project_root = project_root or Path(__file__).resolve().parents[2]
         self._mapping = {
@@ -20,8 +22,25 @@ class PromptRegistry:
         }
 
     def load(self, key: str) -> str:
+        """Load prompt with in-memory caching to avoid repeated disk reads."""
+        if key in self._cache:
+            return self._cache[key]
+
         relative_path = self._mapping.get(key)
         if relative_path is None:
             raise KeyError(f"unknown prompt key: {key}")
+
         prompt_path = self.project_root / relative_path
-        return prompt_path.read_text(encoding="utf-8").strip()
+        content = prompt_path.read_text(encoding="utf-8").strip()
+        self._cache[key] = content
+        return content
+
+    @classmethod
+    def clear_cache(cls) -> None:
+        """Clear the shared prompt cache."""
+        cls._cache.clear()
+
+    @classmethod
+    def cache_info(cls) -> dict:
+        """Get cache statistics (size and cached keys)."""
+        return {"size": len(cls._cache), "keys": list(cls._cache.keys())}

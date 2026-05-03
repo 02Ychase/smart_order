@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from service.agent_runtime.state import AgentPlan
 from service.rag.models import RagQueryPlan
 
@@ -19,7 +21,9 @@ class RagQueryPlanner:
         sort_by = filters.get("sort_by")
         price_preference = filters.get("price_preference")
 
-        _apply_memory_hints(memories, cuisine_types, flavor_preferences, exclude_allergens)
+        preferred_dishes: list[str] = []
+        preferred_merchants: list[str] = []
+        _apply_memory_hints(memories, cuisine_types, flavor_preferences, exclude_allergens, preferred_dishes, preferred_merchants)
 
         expansion_queries = [normalized, original_query]
         if exclude_allergens:
@@ -64,6 +68,8 @@ class RagQueryPlanner:
             },
             source_types=source_types,
             answer_mode=agent_plan.intent,
+            preferred_dishes=preferred_dishes,
+            preferred_merchants=preferred_merchants,
         )
 
 
@@ -72,7 +78,13 @@ def _apply_memory_hints(
     cuisine_types: list[str],
     flavor_preferences: list[str],
     exclude_allergens: list[str],
+    preferred_dishes: list[str] | None = None,
+    preferred_merchants: list[str] | None = None,
 ) -> None:
+    if preferred_dishes is None:
+        preferred_dishes = []
+    if preferred_merchants is None:
+        preferred_merchants = []
     for mem in memories:
         memory_type = mem.get("memory_type", "")
         content = str(mem.get("content", ""))
@@ -87,3 +99,60 @@ def _apply_memory_hints(
             for flavor in ["辣", "麻", "酸", "甜", "清淡", "鲜", "香"]:
                 if flavor in content and flavor not in flavor_preferences:
                     flavor_preferences.append(flavor)
+        elif memory_type == "dish_preference" and content:
+            dishes = _extract_dish_preferences(content)
+            for dish in dishes:
+                if dish not in preferred_dishes:
+                    preferred_dishes.append(dish)
+        elif memory_type == "merchant_preference" and content:
+            merchants = _extract_merchant_preferences(content)
+            for merchant in merchants:
+                if merchant not in preferred_merchants:
+                    preferred_merchants.append(merchant)
+
+    # Also extract dish/merchant preferences from food_preference memories
+    # as they may contain specific dish/merchant mentions
+    for mem in memories:
+        memory_type = mem.get("memory_type", "")
+        content = str(mem.get("content", ""))
+        if memory_type == "food_preference" and content:
+            dishes = _extract_dish_preferences(content)
+            for dish in dishes:
+                if dish not in preferred_dishes:
+                    preferred_dishes.append(dish)
+            merchants = _extract_merchant_preferences(content)
+            for merchant in merchants:
+                if merchant not in preferred_merchants:
+                    preferred_merchants.append(merchant)
+
+
+def _extract_dish_preferences(content: str) -> list[str]:
+    """Extract dish names from memory content."""
+    dishes: list[str] = []
+    patterns = [
+        r"喜欢(.+?)(?:，|。|,|$)",
+        r"爱吃(.+?)(?:，|。|,|$)",
+        r"经常点(.+?)(?:，|。|,|$)",
+        r"推荐(.+?)(?:，|。|,|$)",
+        r"想?(?:吃|要)(.+?)(?:，|。|,|$)",
+    ]
+    for pattern in patterns:
+        matches = re.findall(pattern, content)
+        dishes.extend(matches)
+    return [d.strip() for d in dishes if d.strip()]
+
+
+def _extract_merchant_preferences(content: str) -> list[str]:
+    """Extract merchant names from memory content."""
+    merchants: list[str] = []
+    patterns = [
+        r"经常去(.+?)(?:，|。|,|$)",
+        r"喜欢去(.+?)(?:，|。|,|$)",
+        r"常去(.+?)(?:，|。|,|$)",
+        r"推荐(.+?)(?:，|。|,|$)",
+        r"(?:在|去)(.+?)(?:吃|点|买)(?:.+?)?(?:，|。|,|$)?",
+    ]
+    for pattern in patterns:
+        matches = re.findall(pattern, content)
+        merchants.extend(matches)
+    return [m.strip() for m in merchants if m.strip()]

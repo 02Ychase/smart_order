@@ -1,4 +1,5 @@
 from service.agent_runtime.planner import LangGraphAgentPlanner
+from service.agent_runtime.schemas import AgentPlanSchema, FiltersSchema, GraphToolCallSchema
 
 
 class StubLLM:
@@ -12,6 +13,23 @@ class StubLLM:
 class RaisingLLM:
     def call(self, query: str, system_instruction: str):
         raise RuntimeError("llm unavailable")
+
+
+class StubStructuredLLM:
+    """Mock for LLM with `invoke()` method that returns a Pydantic schema."""
+
+    def __init__(self, schema_result: AgentPlanSchema) -> None:
+        self.schema_result = schema_result
+
+    def invoke(self, messages, **kwargs):
+        return self.schema_result
+
+
+class RaisingStructuredLLM:
+    """Mock structured LLM that always raises, to test fallback."""
+
+    def invoke(self, messages, **kwargs):
+        raise RuntimeError("structured llm unavailable")
 
 
 def test_planner_recommends_directly_without_budget_or_party_size() -> None:
@@ -195,3 +213,149 @@ def test_planner_treats_null_tool_calls_as_empty_list() -> None:
     plan = planner.plan("你好", {})
 
     assert plan.tool_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Structured output tests
+# ---------------------------------------------------------------------------
+
+
+def test_planner_schema_to_plan_converts_recommendation_correctly() -> None:
+    """Verify _schema_to_plan converts a Pydantic schema to AgentPlan with
+    correct tool name normalization and filter merging."""
+    planner = LangGraphAgentPlanner()
+
+    schema = AgentPlanSchema(
+        intent="recommendation",
+        normalized_query="辣的湘菜",
+        requires_rag=True,
+        filters=FiltersSchema(
+            cuisine_types=["湘菜"],
+            flavor_preferences=["辣"],
+        ),
+        tool_calls=[
+            GraphToolCallSchema(
+                tool_name="recommend_dishes",
+                arguments={"query": "辣的湘菜", "cuisine_types": ["湘菜"], "flavor_preferences": ["辣"]},
+                writes_database=False,
+            )
+        ],
+        should_answer_directly=True,
+        response_hint="推荐辣味湘菜",
+    )
+
+    plan = planner._schema_to_plan(schema)
+
+    assert plan.intent == "recommendation"
+    assert plan.normalized_query == "辣的湘菜"
+    assert plan.requires_rag is True
+    assert plan.should_answer_directly is True
+    assert plan.filters["cuisine_types"] == ["湘菜"]
+    assert plan.filters["flavor_preferences"] == ["辣"]
+    assert plan.tool_calls[0].tool_name == "recommend_dishes"
+    assert plan.tool_calls[0].writes_database is False
+    assert plan.response_hint == "推荐辣味湘菜"
+
+
+def test_planner_schema_to_plan_normalizes_hallucinated_tool_name() -> None:
+    """Schema with hallucinated `search_dishes` tool → normalized to `recommend_dishes`."""
+    planner = LangGraphAgentPlanner()
+
+    schema = AgentPlanSchema(
+        intent="recommendation",
+        normalized_query="湘菜",
+        requires_rag=True,
+        tool_calls=[
+            GraphToolCallSchema(
+                tool_name="search_dishes",
+                arguments={"query": "湘菜", "cuisine_types": ["湘菜"]},
+            )
+        ],
+    )
+
+    plan = planner._schema_to_plan(schema)
+
+    assert plan.tool_calls[0].tool_name == "recommend_dishes"
+    assert plan.filters["cuisine_types"] == ["湘菜"]
+
+
+def test_planner_schema_to_plan_enforces_requires_rag_for_recommendation() -> None:
+    """Even if `requires_rag` is False in the schema, intent=recommendation forces True."""
+    planner = LangGraphAgentPlanner()
+
+    schema = AgentPlanSchema(
+        intent="recommendation",
+        normalized_query="推荐湘菜",
+        requires_rag=False,
+        tool_calls=[
+            GraphToolCallSchema(
+                tool_name="recommend_dishes",
+                arguments={"query": "湘菜"},
+            )
+        ],
+    )
+
+    plan = planner._schema_to_plan(schema)
+    assert plan.requires_rag is True
+
+
+def test_planner_schema_to_plan_filters_have_defaults() -> None:
+    """Empty schema should produce an AgentPlan with full default filters."""
+    planner = LangGraphAgentPlanner()
+
+    schema = AgentPlanSchema(intent="greeting")
+    plan = planner._schema_to_plan(schema)
+
+    assert plan.filters["cuisine_types"] == []
+    assert plan.filters["budget_max"] is None
+    assert plan.filters["party_size"] is None
+    assert plan.filters["required_keywords"] == []
+    assert plan.filters["limit"] is None
+
+
+def test_planner_structured_output_path_is_used_when_available() -> None:
+    """When _structured_llm is set, it takes priority over _llm and _model_name."""
+    planner = LangGraphAgentPlanner()
+    planner._llm = StubLLM({"intent": "should_not_be_used"})
+    planner._structured_llm = StubStructuredLLM(
+        AgentPlanSchema(
+            intent="greeting",
+            normalized_query="hello",
+            should_answer_directly=True,
+        )
+    )
+
+    plan = planner.plan("hello", {})
+
+    assert plan.intent == "greeting"
+    assert plan.normalized_query == "hello"
+
+
+def test_planner_structured_output_falls_back_to_rule_plan_on_failure() -> None:
+    """When structured output fails and _llm is None, fall back to rule plan."""
+    planner = LangGraphAgentPlanner()
+    planner._llm = None
+    planner._structured_llm = RaisingStructuredLLM()
+
+    plan = planner.plan("清空购物车", {"user_id": 9})
+
+    assert plan.intent == "cart_action"
+    assert plan.tool_calls[0].tool_name == "cart_clear"
+
+
+def test_planner_structured_output_falls_back_to_legacy_llm_on_failure() -> None:
+    """When structured output fails but legacy _llm is set, fall back to _llm path."""
+    planner = LangGraphAgentPlanner()
+    planner._llm = StubLLM({
+        "intent": "greeting",
+        "normalized_query": "你好",
+        "tool_calls": [],
+        "should_answer_directly": True,
+        "response_hint": "你好",
+    })
+    planner._structured_llm = RaisingStructuredLLM()
+
+    plan = planner.plan("你好", {})
+
+    assert plan.intent == "greeting"
+    assert plan.normalized_query == "你好"

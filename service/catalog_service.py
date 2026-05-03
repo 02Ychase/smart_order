@@ -51,6 +51,12 @@ class CatalogService:
         )
         return [_serialize_merchant(m) for m in merchants]
 
+    def get_merchant(self, merchant_id: int) -> dict | None:
+        merchant = self.catalog.get_merchant(merchant_id)
+        if merchant is None:
+            return None
+        return _serialize_merchant(merchant)
+
 
 def _serialize_merchant(merchant) -> dict:
     return {

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
+import json
 import logging
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from service.agent_runtime.state import AgentPlan
@@ -13,7 +16,7 @@ from service.rag.filters import apply_hard_filters
 from service.rag.fusion import reciprocal_rank_fusion
 from service.rag.models import FusedCandidate, RagEvidence
 from service.rag.query_planner import RagQueryPlanner
-from service.rag.recall import BusinessRecallRoute, DenseVectorRecallRoute, SqlCatalogRecallRoute
+from service.rag.recall import BusinessRecallRoute, DenseVectorRecallRoute, SparseVectorRecallRoute, SqlCatalogRecallRoute
 from service.rag.reranker import WeightedReranker
 
 logger = logging.getLogger(__name__)
@@ -32,6 +35,7 @@ class AdvancedRagRetriever:
             self.recall_routes = [DenseVectorRecallRoute()]
             if catalog_service is not None:
                 self.recall_routes.extend([
+                    SparseVectorRecallRoute(catalog_service),
                     SqlCatalogRecallRoute(catalog_service),
                     BusinessRecallRoute(catalog_service),
                 ])
@@ -40,7 +44,7 @@ class AdvancedRagRetriever:
 
     def retrieve(self, original_query: str, agent_plan: AgentPlan, memories: list[dict] | None = None, limit: int = 5) -> list[RagEvidence]:
         plan = self.query_planner.plan(original_query, agent_plan, memories or [])
-        cache_key = self._cache_key(plan)
+        cache_key = self._cache_key(plan, memories)
         cached = self._cache_get(cache_key)
         if cached is not None:
             logger.debug("RAG cache hit: key=%s", cache_key[:32])
@@ -48,7 +52,7 @@ class AdvancedRagRetriever:
 
         output_limit = self._output_limit(plan, default=limit)
 
-        route_results = [route.recall(plan, limit=50) for route in self.recall_routes]
+        route_results = self._parallel_recall(plan, limit=50)
         recall_counts = [len(r) for r in route_results]
         logger.debug("RAG recall: routes=%d, counts=%s, query=%s", len(route_results), recall_counts, plan.normalized_query)
 
@@ -70,16 +74,25 @@ class AdvancedRagRetriever:
         self._cache_set(cache_key, serialized)
         return evidence_list
 
-    def _cache_key(self, plan) -> str:
+    def _cache_key(self, plan, memories: list[dict] | None = None) -> str:
         must = plan.must_filters or {}
+        memory_hash = ""
+        if memories:
+            memory_contents = sorted([str(m.get("content", "")) for m in memories])
+            memory_hash = hashlib.sha256(
+                json.dumps(memory_contents, sort_keys=True).encode()
+            ).hexdigest()[:16]
         raw = "|".join([
             plan.normalized_query or "",
+            memory_hash,
             ",".join(sorted(must.get("cuisine_types") or [])),
             str(must.get("budget_max") or ""),
             str(must.get("party_size") or ""),
             ",".join(sorted(must.get("exclude_allergens") or [])),
             ",".join(sorted(must.get("required_keywords") or [])),
             ",".join(sorted(must.get("forbidden_keywords") or [])),
+            ",".join(sorted(plan.preferred_dishes)),
+            ",".join(sorted(plan.preferred_merchants)),
         ])
         return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -101,6 +114,24 @@ class AdvancedRagRetriever:
             while len(self._cache) >= _CACHE_MAX_SIZE:
                 self._cache.popitem(last=False)
             self._cache[key] = (time.monotonic(), data)
+
+    def _parallel_recall(self, plan, limit: int) -> list[list]:
+        results: list[list] = []
+        with ThreadPoolExecutor(max_workers=len(self.recall_routes)) as executor:
+            future_to_route = {
+                executor.submit(route.recall, plan, limit): route
+                for route in self.recall_routes
+            }
+            for future in concurrent.futures.as_completed(future_to_route):
+                route = future_to_route[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                    logger.debug("RAG recall route %s returned %d candidates", route.__class__.__name__, len(result))
+                except Exception as e:
+                    logger.warning("RAG recall route %s failed: %s", route.__class__.__name__, e)
+                    results.append([])
+        return results
 
     @staticmethod
     def _evidence_to_dict(evidence: RagEvidence) -> dict[str, Any]:
