@@ -1,4 +1,6 @@
 from copy import deepcopy
+from database.seeds.extended_merchants import EXTENDED_MERCHANT_SEED_DATA
+from database.seeds.extended_merchants_v2 import EXTENDED_MERCHANTS_V2
 
 
 DISTRICT_POINTS = {
@@ -855,4 +857,6 @@ MERCHANT_SEED_DATA = [
     build_merchant_seed(name="番茄厨房", description="番茄肉酱和焗饭都更偏家常路线", district="浦东", homepage_category="披萨意面", promo_text="焗饭午餐立减8元", delivery_radius_meters=3250, delivery_fee=5.0, min_order_amount=29.0, avg_delivery_minutes=33, rating=4.5, longitude_offset=0.0082, latitude_offset=0.0014, categories=BAKED_RICE_SNACK),
     build_merchant_seed(name="薄脆披萨屋", description="薄底披萨和气泡饮搭配更适合多人分享", district="杨浦", homepage_category="披萨意面", promo_text="分享披萨套餐88折", delivery_radius_meters=3350, delivery_fee=5.5, min_order_amount=32.0, avg_delivery_minutes=36, rating=4.6, longitude_offset=0.0086, latitude_offset=0.0016, categories=PIZZA_PASTA),
     build_merchant_seed(name="焗饭事务所", description="焗饭和餐前小点更适合工作日正餐", district="长宁", homepage_category="披萨意面", promo_text="双人焗饭套餐减10元", delivery_radius_meters=3150, delivery_fee=5.0, min_order_amount=30.0, avg_delivery_minutes=34, rating=4.5, longitude_offset=0.0083, latitude_offset=0.0011, categories=BAKED_RICE_SNACK),
+    *EXTENDED_MERCHANT_SEED_DATA,
+    *EXTENDED_MERCHANTS_V2,
 ]

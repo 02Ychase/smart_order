@@ -7,6 +7,11 @@ const CATEGORY_COVER_STYLES = {
   '日韩料理': 'linear-gradient(135deg, #ffe7ef, #ffc6d8)',
   '麻辣烫': 'linear-gradient(135deg, #ffe0e0, #ffb0b0)',
   '披萨意面': 'linear-gradient(135deg, #ffe9cf, #ffca90)',
+  '龙虾烧烤': 'linear-gradient(135deg, #ff6b6b, #ee5a24)',
+  '火锅串串': 'linear-gradient(135deg, #ff9ff3, #f368e0)',
+  '鸭脖卤味': 'linear-gradient(135deg, #feca57, #ff9f43)',
+  '西餐': 'linear-gradient(135deg, #48dbfb, #0abde3)',
+  '川菜': 'linear-gradient(135deg, #ff6b6b, #ee5a24)',
   '全部': 'linear-gradient(135deg, #eef5ff, #dce9ff)',
 }
 

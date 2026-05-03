@@ -382,10 +382,17 @@ def _format_evidence_for_llm(evidence: list[dict]) -> str:
                 f" - 匹配原因：{'、'.join(item.get('why_matched', []))}"
             )
         else:
-            lines.append(
-                f"{i}. 商家：{facts.get('merchant_name', facts.get('name', ''))}"
-                f" - 简介：{item.get('citation', '')}"
-            )
+            parts = [f"{i}. 商家：{facts.get('merchant_name', facts.get('name', ''))}"]
+            if facts.get('phone'):
+                parts.append(f"电话：{facts['phone']}")
+            if facts.get('detailed_address'):
+                parts.append(f"地址：{facts['detailed_address']}")
+            elif facts.get('address'):
+                parts.append(f"地址：{facts['address']}")
+            if facts.get('business_hours'):
+                parts.append(f"营业时间：{facts['business_hours']}")
+            parts.append(f"简介：{item.get('citation', '')}")
+            lines.append(" - ".join(parts))
     return "\n".join(lines)
 
 

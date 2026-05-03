@@ -2,20 +2,29 @@ from pathlib import Path
 import sys
 
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from api.models.catalog import Dish, DishCategory, Merchant
+from api.models.cart import CartItem
+from api.models.order import OrderItem, DeliveryQuote, MerchantOrder
 from database.seeds.merchant_seed_data import MERCHANT_SEED_DATA
 
 
 
 def seed_catalog(session: Session) -> int:
+    session.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+    session.query(DeliveryQuote).delete()
+    session.query(MerchantOrder).delete()
+    session.query(OrderItem).delete()
+    session.query(CartItem).delete()
     session.query(Dish).delete()
     session.query(DishCategory).delete()
     session.query(Merchant).delete()
+    session.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
     session.commit()
 
     for merchant_payload in MERCHANT_SEED_DATA:

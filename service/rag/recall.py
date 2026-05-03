@@ -353,12 +353,19 @@ class SparseVectorRecallRoute:
 
     @staticmethod
     def _merchant_text(merchant: dict) -> str:
-        return " ".join(filter(None, [
+        parts = [
             str(merchant.get("name", "")),
             str(merchant.get("description", "")),
             str(merchant.get("homepage_category", "")),
             " ".join(merchant.get("merchant_tags", [])),
-        ]))
+        ]
+        if merchant.get("phone"):
+            parts.append(str(merchant["phone"]))
+        if merchant.get("detailed_address"):
+            parts.append(str(merchant["detailed_address"]))
+        elif merchant.get("address"):
+            parts.append(str(merchant["address"]))
+        return " ".join(filter(None, parts))
 
     @staticmethod
     def _dish_text(dish: dict) -> str:

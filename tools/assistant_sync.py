@@ -64,6 +64,12 @@ def _build_merchant_text(merchant: dict) -> str:
         f"评分:{merchant['rating']}",
         f"描述:{merchant['description'][:80] if merchant['description'] else '无描述'}",
     ]
+    if merchant.get('phone'):
+        parts.append(f"电话:{merchant['phone']}")
+    if merchant.get('detailed_address'):
+        parts.append(f"地址:{merchant['detailed_address']}")
+    elif merchant.get('address'):
+        parts.append(f"地址:{merchant['address']}")
     return "。".join(parts)
 
 
@@ -104,6 +110,10 @@ def _create_merchant_candidate(merchant: dict) -> dict:
             "business_hours": merchant["business_hours"],
             "description": merchant["description"],
             "homepage_category": merchant["homepage_category"],
+            "phone": merchant.get("phone", ""),
+            "detailed_address": merchant.get("detailed_address", ""),
+            "address_note": merchant.get("address_note", ""),
+            "district": merchant.get("district", ""),
             "is_available": True,
         },
     }

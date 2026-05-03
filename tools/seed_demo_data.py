@@ -5,16 +5,21 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from sqlalchemy import text
 from api.db import SessionLocal
 from api.models.user import User, UserAddress
+from api.models.cart import Cart
 from api.security import hash_password
 from tools.seed_catalog_data import seed_catalog
 
 
 
 def seed_demo_user(session) -> None:
+    session.execute(text("SET FOREIGN_KEY_CHECKS = 0"))
+    session.query(Cart).delete()
     session.query(UserAddress).delete()
     session.query(User).delete()
+    session.execute(text("SET FOREIGN_KEY_CHECKS = 1"))
     session.commit()
 
     demo_user = User(

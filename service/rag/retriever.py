@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import concurrent.futures
 import hashlib
 import json
 import logging
 import time
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from service.agent_runtime.state import AgentPlan
@@ -117,20 +115,14 @@ class AdvancedRagRetriever:
 
     def _parallel_recall(self, plan, limit: int) -> list[list]:
         results: list[list] = []
-        with ThreadPoolExecutor(max_workers=len(self.recall_routes)) as executor:
-            future_to_route = {
-                executor.submit(route.recall, plan, limit): route
-                for route in self.recall_routes
-            }
-            for future in concurrent.futures.as_completed(future_to_route):
-                route = future_to_route[future]
-                try:
-                    result = future.result()
-                    results.append(result)
-                    logger.debug("RAG recall route %s returned %d candidates", route.__class__.__name__, len(result))
-                except Exception as e:
-                    logger.warning("RAG recall route %s failed: %s", route.__class__.__name__, e)
-                    results.append([])
+        for route in self.recall_routes:
+            try:
+                result = route.recall(plan, limit)
+                results.append(result)
+                logger.debug("RAG recall route %s returned %d candidates", route.__class__.__name__, len(result))
+            except Exception as e:
+                logger.warning("RAG recall route %s failed: %s", route.__class__.__name__, e)
+                results.append([])
         return results
 
     @staticmethod
