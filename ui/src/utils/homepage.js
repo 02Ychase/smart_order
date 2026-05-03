@@ -25,7 +25,11 @@ export const buildHomepageCategories = (merchants) => {
   const uniqueCategories = []
 
   merchants.forEach((merchant) => {
-    if (merchant.homepage_category && !uniqueCategories.includes(merchant.homepage_category)) {
+    if (
+      merchant.homepage_category &&
+      merchant.homepage_category !== '全部' &&
+      !uniqueCategories.includes(merchant.homepage_category)
+    ) {
       uniqueCategories.push(merchant.homepage_category)
     }
   })
