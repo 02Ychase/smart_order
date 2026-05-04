@@ -1,6 +1,7 @@
 from copy import deepcopy
 from database.seeds.extended_merchants import EXTENDED_MERCHANT_SEED_DATA
 from database.seeds.extended_merchants_v2 import EXTENDED_MERCHANTS_V2
+from database.seeds.extended_merchants_v3 import EXTENDED_MERCHANTS_V3
 
 
 DISTRICT_POINTS = {
@@ -859,4 +860,5 @@ MERCHANT_SEED_DATA = [
     build_merchant_seed(name="焗饭事务所", description="焗饭和餐前小点更适合工作日正餐", district="长宁", homepage_category="披萨意面", promo_text="双人焗饭套餐减10元", delivery_radius_meters=3150, delivery_fee=5.0, min_order_amount=30.0, avg_delivery_minutes=34, rating=4.5, longitude_offset=0.0083, latitude_offset=0.0011, categories=BAKED_RICE_SNACK),
     *EXTENDED_MERCHANT_SEED_DATA,
     *EXTENDED_MERCHANTS_V2,
+    *EXTENDED_MERCHANTS_V3,
 ]
