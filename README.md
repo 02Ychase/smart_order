@@ -1,14 +1,14 @@
-# Smart Order — AI-Powered Restaurant Ordering Assistant
+# Smart Order — AI-Powered Food Delivery Assistant
 
-智能点餐助手 · AI 驱动的餐厅点餐系统
+智能外卖点菜系统 · AI 驱动
 
 ---
 
 ## 📖 Overview · 项目简介
 
-**Smart Order** is a full-stack restaurant ordering system featuring an intelligent AI assistant powered by **LangGraph** agent runtime and **advanced RAG** (Retrieval-Augmented Generation). Users can browse merchants, manage carts, place orders, and have natural-language conversations with the AI assistant for dish recommendations, order management, and delivery inquiries.
+**Smart Order** is a full-stack food delivery ordering system built around an **AI Agent** (LangGraph) and **RAG** (Retrieval-Augmented Generation) pipeline. Users can browse merchants, manage carts, place orders, and have natural-language conversations with the AI assistant for dish recommendations, order management, and delivery inquiries.
 
-**Smart Order** 是一个全栈餐厅点餐系统，核心亮点是基于 **LangGraph** 智能体运行时和**高级 RAG** 检索增强生成技术的 AI 助手。用户可浏览商家、管理购物车、下单，并通过自然语言与 AI 助手交互，获取菜品推荐、订单管理和配送咨询等服务。
+**Smart Order** 是一个全栈智能外卖点菜系统，核心是基于 **AI Agent**（LangGraph）和 **RAG**（检索增强生成）管线的 AI 助手。用户可浏览商家、管理购物车、下单，并通过自然语言与 AI 助手交互，获取菜品推荐、订单管理和配送咨询等服务。
 
 ---
 
@@ -29,7 +29,7 @@
 
 ### AI Assistant · AI 智能助手
 - **LangGraph Agent Runtime** — State-machine-based conversational agent / 基于状态机的对话智能体
-- **Advanced RAG Pipeline** — Multi-route recall, RRF fusion, weighted reranking, diversification / 多路召回、RRF 融合、加权重排序、结果多样化
+- **RAG Pipeline** — Multi-route recall, RRF fusion, weighted reranking, diversification / 多路召回、RRF 融合、加权重排序、结果多样化
 - **Grounding & Citations** — Evidence-backed answers with source attribution / 带引用的可信回答
 - **Undo Support** — Reversible actions (cart, address, preference changes) / 可撤销操作（购物车、地址、偏好变更）
 - **Long-term Memory** — Persistent user preference learning / 用户偏好长期记忆
