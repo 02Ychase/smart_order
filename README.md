@@ -1,14 +1,14 @@
-# Smart Order — AI-Powered Food Delivery Assistant
+# Smart Order — 智能外卖助手
 
-智能外卖点菜系统 · AI 驱动
+AI-Powered Food Delivery Assistant
 
 ---
 
 ## 📖 Overview · 项目简介
 
-**Smart Order** is a full-stack food delivery ordering system built around an **AI Agent** (LangGraph) and **RAG** (Retrieval-Augmented Generation) pipeline. Users can browse merchants, manage carts, place orders, and have natural-language conversations with the AI assistant for dish recommendations, order management, and delivery inquiries.
+**Smart Order** is a full-stack food delivery system built around an **AI Agent** (LangGraph) and **RAG** (Retrieval-Augmented Generation) pipeline. Users can browse merchants, manage carts, place orders, and have natural-language conversations with the AI assistant for dish recommendations, order management, and delivery inquiries.
 
-**Smart Order** 是一个全栈智能外卖点菜系统，核心是基于 **AI Agent**（LangGraph）和 **RAG**（检索增强生成）管线的 AI 助手。用户可浏览商家、管理购物车、下单，并通过自然语言与 AI 助手交互，获取菜品推荐、订单管理和配送咨询等服务。
+**智能外卖助手** 是一个全栈外卖点餐系统，核心是基于 **AI Agent**（LangGraph）和 **RAG**（检索增强生成）管线的 AI 助手。用户可浏览商家、管理购物车、下单，并通过自然语言与 AI 助手交互，获取菜品推荐、订单管理和配送咨询等服务。
 
 ---
 
