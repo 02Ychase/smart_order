@@ -14,7 +14,7 @@ AI-Powered Food Delivery Assistant
 
 > **📚 Learning Project · 学习项目**  
 > This project is built for **learning and educational purposes**. Parts of the codebase are developed with **Vibe Coding** — an AI-assisted development approach where some code is generated through iterative prompting rather than fully manual authoring. While the overall architecture and core logic are intentionally designed, certain modules may reflect experimental or AI-suggested patterns.  
-> 本项目为**学习和教育目的**而构建。部分代码采用了 **Vibe Coding**（一种 AI 辅助开发的方式）生成。整体架构和核心逻辑经过有意设计，但部分模块可能包含实验性或 AI 建议的模式。
+> 本项目为**学习目的**而构建。部分代码采用了 **Vibe Coding**生成。整体架构和核心逻辑经过有意设计，但部分模块可能包含实验性或 AI 建议的模式。
 
 ---
 
