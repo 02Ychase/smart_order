@@ -13,11 +13,11 @@ router = APIRouter(prefix="/assistant", tags=["assistant"])
 
 
 @router.post("/chat", response_model=AssistantChatResponse)
-def chat(
+async def chat(
     request: AssistantChatRequest,
     session: Session = Depends(get_db_session),
 ) -> AssistantChatResponse:
-    return AssistantService(session).chat(request)
+    return await AssistantService(session).async_chat(request)
 
 
 @router.post("/chat/stream")
