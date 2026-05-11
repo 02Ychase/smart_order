@@ -6,6 +6,7 @@ from langgraph.graph import END, StateGraph
 from service.agent_runtime.nodes import (
     action_node,
     evaluate_node,
+    input_guardrail_node,
     load_memory_node,
     memory_writer_node,
     plan_node,
@@ -34,6 +35,7 @@ def build_agent_graph(
     checkpointer = checkpointer or InMemorySaver()
 
     workflow = StateGraph(SmartOrderAgentState)
+    workflow.add_node("input_guardrail", input_guardrail_node)
     workflow.add_node("load_memory", lambda state: load_memory_node(state, memory_service))
     workflow.add_node("plan", lambda state: plan_node(state, planner))
     workflow.add_node("rag", lambda state: rag_node(state, retriever))
@@ -43,7 +45,12 @@ def build_agent_graph(
     workflow.add_node("respond", lambda state: respond_node(state, use_llm=use_llm_response))
     workflow.add_node("write_memory", lambda state: memory_writer_node(state, memory_service))
 
-    workflow.set_entry_point("load_memory")
+    workflow.set_entry_point("input_guardrail")
+    workflow.add_conditional_edges(
+        "input_guardrail",
+        lambda state: "respond" if state.get("guardrail_blocked") else "load_memory",
+        {"respond": "respond", "load_memory": "load_memory"},
+    )
     workflow.add_edge("load_memory", "plan")
     workflow.add_conditional_edges(
         "plan",

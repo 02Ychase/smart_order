@@ -68,3 +68,5 @@ class SmartOrderAgentState(TypedDict):
     plan_steps: NotRequired[list[dict[str, Any]]]
     current_step_index: NotRequired[int]
     metrics: NotRequired[dict[str, Any]]
+    guardrail_blocked: NotRequired[bool]
+    guardrail_reason: NotRequired[str]

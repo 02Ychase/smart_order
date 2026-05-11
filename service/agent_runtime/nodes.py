@@ -18,6 +18,20 @@ def latest_user_message(state: dict) -> str:
     return ""
 
 
+def input_guardrail_node(state: dict) -> dict:
+    from service.guardrails import InputGuardrail
+
+    guardrail = InputGuardrail()
+    user_message = latest_user_message(state)
+    result = guardrail.check(user_message)
+
+    if not result.allowed:
+        logger.warning("Input guardrail blocked: %s", result.reason)
+        return {"guardrail_blocked": True, "guardrail_reason": result.reason}
+
+    return {"guardrail_blocked": False}
+
+
 def load_memory_node(state: dict, memory_service=None) -> dict:
     from service.observability import MetricsCollector
     collector = MetricsCollector()
@@ -418,6 +432,29 @@ def _normalize_tool_result(result: dict, state: dict) -> dict:
 
 
 def respond_node(state: dict, use_llm: bool = True) -> dict:
+    # Handle guardrail-blocked requests
+    if state.get("guardrail_blocked"):
+        message = "抱歉，您的请求无法处理。请尝试换一种方式提问。"
+        payload = {
+            "session_id": state.get("session_id"),
+            "message": message,
+            "response_type": "guardrail_blocked",
+            "needs_clarification": False,
+            "clarification_question": None,
+            "extracted_constraints": None,
+            "recommendations": [],
+            "comparisons": [],
+            "citations": [],
+            "suggested_actions": [],
+            "pending_action": None,
+            "executed_actions": [],
+            "undo_available": False,
+        }
+        return {
+            "messages": state.get("messages", []) + [AIMessage(content=message)],
+            "response_payload": payload,
+        }
+
     plan = state.get("current_plan")
     evidence = state.get("recent_evidence", [])
     response_type = _external_response_type(plan, state)
