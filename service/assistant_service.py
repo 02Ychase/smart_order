@@ -1,15 +1,18 @@
 import os
 import uuid
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy.orm import Session
 
 from api.schemas import AssistantChatRequest, AssistantChatResponse, AssistantHealthResponse
 from service.agent_runtime.graph import build_agent_graph
 from service.agent_runtime.nodes import LocalActionExecutor
+from service.conversation_store import InMemoryConversationStore
 from service.rag.retriever import AdvancedRagRetriever
 from service.user_memory_service import UserMemoryService
 from tools.assistant_vector_store import AssistantVectorStore
+
+_conversation_store = InMemoryConversationStore()
 
 
 class AssistantService:
@@ -26,9 +29,14 @@ class AssistantService:
                 action_executor=LocalActionExecutor(self.session),
                 memory_service=UserMemoryService(self.session) if graph_session is not None else None,
             )
+
+        new_message = HumanMessage(content=request.message)
+        history = _conversation_store.get_history(session_id)
+        messages = history + [new_message]
+
         result = self._graph.invoke(
             {
-                "messages": [HumanMessage(content=request.message)],
+                "messages": messages,
                 "session_id": session_id,
                 "user_id": request.user_id,
                 "loaded_user_memories": [],
@@ -36,10 +44,16 @@ class AssistantService:
                 "recent_action_ids": [],
                 "tool_results": [],
                 "iteration_count": 0,
-                "max_iterations": 3,
+                "max_iterations": 5,
             },
             config={"configurable": {"thread_id": session_id}},
         )
+
+        _conversation_store.append(session_id, new_message)
+        response_msg = result.get("response_payload", {}).get("message", "")
+        if response_msg:
+            _conversation_store.append(session_id, AIMessage(content=response_msg))
+
         return result["response_payload"]
 
 
