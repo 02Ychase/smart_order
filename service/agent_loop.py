@@ -1,5 +1,12 @@
 import json
 import logging
+import warnings
+
+warnings.warn(
+    "AgentLoop is deprecated. Use service.agent_runtime.graph.build_agent_graph() instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from service.tool_registry import ToolRegistry, ToolSchema
 from service.tools.cart_tool import add_to_cart_tool
