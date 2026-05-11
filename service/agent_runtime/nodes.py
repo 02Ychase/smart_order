@@ -19,10 +19,19 @@ def latest_user_message(state: dict) -> str:
 
 
 def load_memory_node(state: dict, memory_service=None) -> dict:
+    from service.observability import MetricsCollector
+    collector = MetricsCollector()
+    collector.set_metadata("session_id", state.get("session_id"))
+    collector.set_metadata("user_id", state.get("user_id"))
+
     user_id = state.get("user_id")
     if user_id is None or memory_service is None:
-        return {"loaded_user_memories": []}
-    return {"loaded_user_memories": memory_service.list_memories(user_id)}
+        return {"loaded_user_memories": [], "metrics": collector.to_log_dict()}
+
+    with collector.timer("load_memory"):
+        memories = memory_service.list_memories(user_id)
+
+    return {"loaded_user_memories": memories, "metrics": collector.to_log_dict()}
 
 
 def memory_writer_node(state: dict, memory_service=None) -> dict:
@@ -443,6 +452,14 @@ def respond_node(state: dict, use_llm: bool = True) -> dict:
         "executed_actions": tool_results,
         "undo_available": bool(state.get("recent_action_ids")),
     }
+
+    from service.observability import MetricsCollector
+    collector = MetricsCollector()
+    collector.set_metadata("response_type", response_type)
+    collector.set_metadata("evidence_count", len(evidence))
+    collector.set_metadata("tool_results_count", len(tool_results))
+    collector.emit("agent_respond")
+
     return {
         "messages": state.get("messages", []) + [AIMessage(content=message)],
         "response_payload": payload,

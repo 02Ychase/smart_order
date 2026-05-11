@@ -67,3 +67,4 @@ class SmartOrderAgentState(TypedDict):
     max_iterations: NotRequired[int]
     plan_steps: NotRequired[list[dict[str, Any]]]
     current_step_index: NotRequired[int]
+    metrics: NotRequired[dict[str, Any]]

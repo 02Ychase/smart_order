@@ -31,22 +31,22 @@ _EMBEDDING_MODE = os.getenv("USER_PREF_MATCH_MODE", "embedding")
 #   user_pref  - long-term user preference memory match
 INTENT_WEIGHTS: dict[str, dict[str, float]] = {
     "recommendation": {
-        "dense": 0.20,
+        "dense": 0.15,
         "lexical": 0.10,
         "constraint": 0.20,
-        "rating": 0.10,
+        "rating": 0.15,
         "business": 0.10,
         "user_pref": 0.10,
         "cross_encoder": 0.20,
     },
     "knowledge": {
         "dense": 0.25,
-        "lexical": 0.15,
+        "lexical": 0.20,
         "constraint": 0.10,
         "rating": 0.10,
         "business": 0.05,
         "user_pref": 0.10,
-        "cross_encoder": 0.25,
+        "cross_encoder": 0.20,
     },
     "default": {
         "dense": 0.20,

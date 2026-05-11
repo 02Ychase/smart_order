@@ -43,23 +43,32 @@ class AdvancedRagRetriever:
         self._cache: OrderedDict[str, tuple[float, list[dict[str, Any]]]] = OrderedDict()
 
     def retrieve(self, original_query: str, agent_plan: AgentPlan, memories: list[dict] | None = None, limit: int = 5) -> list[RagEvidence]:
+        from service.observability import MetricsCollector
+        collector = MetricsCollector()
+        collector.set_metadata("query", original_query)
+
         plan = self.query_planner.plan(original_query, agent_plan, memories or [])
         cache_key = self._cache_key(plan, memories)
         cached = self._cache_get(cache_key)
         if cached is not None:
             logger.debug("RAG cache hit: key=%s", cache_key[:32])
+            collector.increment("rag.cache_hit")
+            collector.emit("rag_retrieve")
             return [self._dict_to_evidence(item) for item in cached]
 
         output_limit = self._output_limit(plan, default=limit)
 
-        route_results = self._parallel_recall(plan, limit=50)
+        with collector.timer("recall"):
+            route_results = self._parallel_recall(plan, limit=50)
         recall_counts = [len(r) for r in route_results]
         logger.debug("RAG recall: routes=%d, counts=%s, query=%s", len(route_results), recall_counts, plan.normalized_query)
 
-        fused = reciprocal_rank_fusion(route_results, limit=50)
+        with collector.timer("fusion"):
+            fused = reciprocal_rank_fusion(route_results, limit=50)
         logger.debug("RAG fusion: %d candidates after RRF", len(fused))
 
-        filtered = apply_hard_filters(fused, plan)
+        with collector.timer("filter"):
+            filtered = apply_hard_filters(fused, plan)
         logger.debug("RAG filter: %d candidates after hard filters (removed %d)", len(filtered), len(fused) - len(filtered))
 
         # Cross-encoder reranking (after hard filters, before weighted rerank)
@@ -67,12 +76,20 @@ class AdvancedRagRetriever:
             filtered = self.cross_encoder.rerank(original_query, filtered, top_k=min(20, len(filtered)))
             logger.debug("RAG cross-encoder: %d candidates after reranking", len(filtered))
 
-        ranked = self.reranker.rerank(filtered, original_query=original_query, query_plan=plan, memories=memories or [])
+        with collector.timer("rerank"):
+            ranked = self.reranker.rerank(filtered, original_query=original_query, query_plan=plan, memories=memories or [])
         ranked = self._apply_result_ordering(ranked, plan)
 
         merchant_scoped = bool(plan.must_filters.get("merchant_name"))
-        diversified = diversify(ranked, limit=output_limit, merchant_scoped=merchant_scoped)
+        with collector.timer("diversify"):
+            diversified = diversify(ranked, limit=output_limit, merchant_scoped=merchant_scoped)
         logger.debug("RAG diversify: %d candidates after diversity (limit=%d)", len(diversified), output_limit)
+
+        collector.set_metadata("recall_counts", recall_counts)
+        collector.set_metadata("after_fusion", len(fused))
+        collector.set_metadata("after_filter", len(filtered))
+        collector.set_metadata("final_count", len(diversified))
+        collector.emit("rag_retrieve")
 
         evidence_list = [self._to_evidence(item) for item in diversified]
         serialized = [self._evidence_to_dict(e) for e in evidence_list]
