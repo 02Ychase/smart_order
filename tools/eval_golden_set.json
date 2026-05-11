@@ -1,0 +1,46 @@
+{
+  "version": "1.0",
+  "test_cases": [
+    {
+      "id": "rec_01",
+      "query": "推荐几个辣的湘菜",
+      "intent": "recommendation",
+      "expected_source_type": "dish",
+      "expected_keywords": ["湘菜", "辣"],
+      "min_results": 1
+    },
+    {
+      "id": "rec_02",
+      "query": "有没有适合两个人吃的套餐",
+      "intent": "recommendation",
+      "expected_source_type": "dish",
+      "expected_keywords": [],
+      "min_results": 1
+    },
+    {
+      "id": "know_01",
+      "query": "兰姨小炒的电话是多少",
+      "intent": "knowledge",
+      "expected_source_type": "merchant",
+      "expected_keywords": ["兰姨小炒"],
+      "min_results": 1
+    },
+    {
+      "id": "know_02",
+      "query": "哪些店卖咖啡",
+      "intent": "knowledge",
+      "expected_source_type": "merchant",
+      "expected_keywords": ["咖啡"],
+      "min_results": 1
+    },
+    {
+      "id": "rec_03",
+      "query": "不要花生的菜",
+      "intent": "recommendation",
+      "expected_source_type": "dish",
+      "expected_keywords": [],
+      "expected_absent": ["花生"],
+      "min_results": 1
+    }
+  ]
+}
