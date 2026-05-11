@@ -3,11 +3,11 @@ from __future__ import annotations
 import logging
 import math
 import os
-from functools import lru_cache
 from http import HTTPStatus
 
 import dashscope
 
+from service.cache import TieredCache
 from service.rag.models import FusedCandidate, RagQueryPlan
 
 logger = logging.getLogger(__name__)
@@ -184,12 +184,15 @@ def _calc_user_preference_match(
     return score / weight_sum
 
 
-@lru_cache(maxsize=_EMBEDDING_CACHE_SIZE)
+_embedding_cache = TieredCache(l1_max_size=_EMBEDDING_CACHE_SIZE)
+
+
 def _get_embedding_cached(text: str) -> tuple[float, ...] | None:
-    """Get embedding vector for text via DashScope, cached by LRU.
-    
-    Returns a tuple (hashable for lru_cache) or None on failure.
-    """
+    """Get embedding vector for text via DashScope, cached by TieredCache."""
+    cached = _embedding_cache.get(text)
+    if cached is not None:
+        return cached
+
     api_key = os.getenv("DASHSCOPE_API_KEY")
     if not api_key:
         logger.warning("DASHSCOPE_API_KEY not set — embedding unavailable")
@@ -204,12 +207,19 @@ def _get_embedding_cached(text: str) -> tuple[float, ...] | None:
         if resp["status_code"] == HTTPStatus.OK:
             embedding = resp.get("output", {}).get("embeddings", [{}])[0].get("embedding")
             if embedding and len(embedding) == _EMBEDDING_DIMENSION:
-                return tuple(embedding)
+                result = tuple(embedding)
+                _embedding_cache.set(text, result)
+                return result
         logger.error(f"Embedding request failed: status={resp.get('status_code')}")
         return None
     except Exception as e:
         logger.error(f"Embedding request failed: {e}")
         return None
+
+
+# Expose cache_clear for backward compatibility with tests
+def cache_clear():
+    _embedding_cache.clear()
 
 
 def cosine_similarity(vec1: list[float] | tuple[float, ...], vec2: list[float] | tuple[float, ...]) -> float:

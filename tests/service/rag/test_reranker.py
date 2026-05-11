@@ -8,6 +8,7 @@ from service.rag.reranker import (
     _get_embedding_cached,
     _text_overlaps,
     _text_overlaps_embedding,
+    cache_clear,
     _text_overlaps_legacy,
     cosine_similarity,
 )
@@ -209,7 +210,7 @@ def test_text_overlaps_embedding_high_similarity(monkeypatch) -> None:
     mock_embed = _make_embedding_mock(similarity=0.90)
 
     with patch("service.rag.reranker._get_embedding_cached", wraps=None) as mock_cached:
-        _get_embedding_cached.cache_clear()
+        cache_clear()
         with patch("service.rag.reranker.dashscope.TextEmbedding.call", side_effect=mock_embed):
             # Force fresh cache by calling the embedding function directly
             result = _text_overlaps_embedding("我爱吃辣的川菜", "川味麻辣 鱼香肉丝")
@@ -221,7 +222,7 @@ def test_text_overlaps_embedding_low_similarity(monkeypatch) -> None:
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
     mock_embed = _make_embedding_mock(similarity=0.20)
 
-    _get_embedding_cached.cache_clear()
+    cache_clear()
     with patch("service.rag.reranker.dashscope.TextEmbedding.call", side_effect=mock_embed):
         result = _text_overlaps_embedding("我爱吃辣的川菜", "清淡粤菜 白切鸡")
 
@@ -230,7 +231,7 @@ def test_text_overlaps_embedding_low_similarity(monkeypatch) -> None:
 
 def test_text_overlaps_embedding_no_api_key_returns_false(monkeypatch) -> None:
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
-    _get_embedding_cached.cache_clear()
+    cache_clear()
     result = _text_overlaps_embedding("anything", "anything else")
     assert result is False
 
@@ -241,7 +242,7 @@ def test_text_overlaps_embedding_no_api_key_returns_false(monkeypatch) -> None:
 def test_text_overlaps_uses_embedding_mode_by_default(monkeypatch) -> None:
     monkeypatch.setenv("USER_PREF_MATCH_MODE", "embedding")
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
-    _get_embedding_cached.cache_clear()
+    cache_clear()
 
     with patch("service.rag.reranker._text_overlaps_embedding", return_value=True) as mock_emb:
         with patch("service.rag.reranker._text_overlaps_legacy", return_value=False) as mock_leg:
@@ -254,7 +255,7 @@ def test_text_overlaps_uses_embedding_mode_by_default(monkeypatch) -> None:
 def test_text_overlaps_uses_legacy_when_configured(monkeypatch) -> None:
     monkeypatch.setenv("USER_PREF_MATCH_MODE", "legacy")
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
-    _get_embedding_cached.cache_clear()
+    cache_clear()
 
     with patch("service.rag.reranker._text_overlaps_embedding", return_value=True) as mock_emb:
         with patch("service.rag.reranker._text_overlaps_legacy", return_value=True) as mock_leg:
@@ -294,7 +295,7 @@ def test_user_pref_match_returns_zero_with_no_memories() -> None:
 
 def test_user_pref_match_scores_high_similarity_memories_higher(monkeypatch) -> None:
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
-    _get_embedding_cached.cache_clear()
+    cache_clear()
 
     memories = [
         {"content": "我喜欢吃辣的川菜", "confidence": 0.9},
@@ -421,7 +422,7 @@ def test_user_pref_match_fact_in_candidate_facts_dict(monkeypatch) -> None:
 
 def test_get_embedding_cached_reuses_results(monkeypatch) -> None:
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
-    _get_embedding_cached.cache_clear()
+    cache_clear()
 
     fake_embedding = [0.1] * 1536
     mock_resp = MagicMock()
@@ -441,7 +442,7 @@ def test_get_embedding_cached_reuses_results(monkeypatch) -> None:
 
 def test_get_embedding_cached_returns_none_on_api_failure(monkeypatch) -> None:
     monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
-    _get_embedding_cached.cache_clear()
+    cache_clear()
 
     mock_resp = MagicMock()
     mock_resp.__getitem__ = MagicMock(return_value=500)
@@ -455,7 +456,7 @@ def test_get_embedding_cached_returns_none_on_api_failure(monkeypatch) -> None:
 
 def test_get_embedding_cached_no_api_key(monkeypatch) -> None:
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
-    _get_embedding_cached.cache_clear()
+    cache_clear()
     result = _get_embedding_cached("text")
     assert result is None
 
