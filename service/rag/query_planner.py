@@ -7,6 +7,9 @@ from service.rag.models import RagQueryPlan
 
 
 class RagQueryPlanner:
+    def __init__(self, rewriter=None) -> None:
+        self._rewriter = rewriter
+
     def plan(self, original_query: str, agent_plan: AgentPlan, memories: list[dict]) -> RagQueryPlan:
         normalized = agent_plan.normalized_query or original_query
         filters = dict(agent_plan.filters or {})
@@ -25,7 +28,13 @@ class RagQueryPlanner:
         preferred_merchants: list[str] = []
         _apply_memory_hints(memories, cuisine_types, flavor_preferences, exclude_allergens, preferred_dishes, preferred_merchants)
 
-        expansion_queries = [normalized, original_query]
+        if self._rewriter is not None:
+            expansion_queries = self._rewriter.rewrite(normalized)
+            if original_query not in expansion_queries:
+                expansion_queries.append(original_query)
+        else:
+            expansion_queries = [normalized, original_query]
+
         if exclude_allergens:
             expansion_queries.append("不含" + " ".join(exclude_allergens))
 
