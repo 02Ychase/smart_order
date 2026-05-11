@@ -325,6 +325,34 @@ class LangGraphAgentPlanner:
                 should_answer_directly=True,
             )
 
+        if "购物车" in message and any(term in message for term in ("加", "添加", "放入", "加入")):
+            return AgentPlan(
+                intent="cart_action",
+                tool_calls=[GraphToolCall(tool_name="add_to_cart", writes_database=True)],
+                should_answer_directly=True,
+            )
+
+        if "购物车" in message and any(term in message for term in ("删", "移除", "去掉", "不要")):
+            return AgentPlan(
+                intent="cart_action",
+                tool_calls=[GraphToolCall(tool_name="remove_from_cart", writes_database=True)],
+                should_answer_directly=True,
+            )
+
+        if any(term in message for term in ("保存地址", "加入地址", "地址管理")):
+            return AgentPlan(
+                intent="address_action",
+                tool_calls=[GraphToolCall(tool_name="save_address", writes_database=True)],
+                should_answer_directly=True,
+            )
+
+        if any(term in message for term in ("偏好", "记住我", "不吃", "过敏")):
+            return AgentPlan(
+                intent="preference_action",
+                tool_calls=[GraphToolCall(tool_name="upsert_preference", writes_database=True)],
+                should_answer_directly=True,
+            )
+
         if any(term in message for term in ("推荐", "吃什么", "来几个")):
             filters = {
                 "cuisine_types": ["湘菜"] if "湘菜" in user_message else [],
