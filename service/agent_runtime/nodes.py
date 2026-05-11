@@ -18,10 +18,30 @@ def latest_user_message(state: dict) -> str:
     return ""
 
 
-def input_guardrail_node(state: dict) -> dict:
-    from service.guardrails import InputGuardrail
+_input_guardrail = None
 
-    guardrail = InputGuardrail()
+
+def _get_input_guardrail():
+    global _input_guardrail
+    if _input_guardrail is None:
+        from service.config import get_config
+        from service.guardrails import InputGuardrail
+        _input_guardrail = InputGuardrail(max_length=get_config().guardrails.max_input_length)
+    return _input_guardrail
+
+
+def _reset_input_guardrail():
+    global _input_guardrail
+    _input_guardrail = None
+
+
+def input_guardrail_node(state: dict) -> dict:
+    from service.config import get_config
+
+    if not get_config().guardrails.enable_input_guardrail:
+        return {"guardrail_blocked": False}
+
+    guardrail = _get_input_guardrail()
     user_message = latest_user_message(state)
     result = guardrail.check(user_message)
 
@@ -473,6 +493,15 @@ def respond_node(state: dict, use_llm: bool = True) -> dict:
         message = "你好！我是你的智能点餐助手，可以帮你推荐菜品、查找商家信息、管理购物车。"
     else:
         message = "我没有找到足够匹配的结果，可以换个说法再试。"
+
+    if evidence and use_llm:
+        from service.config import get_config
+        if get_config().guardrails.enable_output_guardrail:
+            from service.guardrails import OutputGuardrail
+            output_result = OutputGuardrail().check(message, evidence)
+            if not output_result.allowed:
+                logger.warning("Output guardrail triggered: %s, falling back to template", output_result.reason)
+                message = _template_recommendation(recommendations)
 
     payload = {
         "session_id": state.get("session_id"),

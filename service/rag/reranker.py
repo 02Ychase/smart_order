@@ -22,43 +22,7 @@ _EMBEDDING_CACHE_SIZE = 2048
 # Feature flag: set to "legacy" to use keyword matching, "embedding" for embedding-based
 _EMBEDDING_MODE = os.getenv("USER_PREF_MATCH_MODE", "embedding")
 
-# Intent-based weight profiles for dynamic reranking.
-# Each profile distributes 1.0 total weight across six scoring factors:
-#   dense      - semantic vector similarity
-#   lexical    - keyword / BM25 text match
-#   constraint - hard-filter / cuisine / flavor alignment
-#   rating     - merchant average rating (0-5)
-#   business   - recommended-dish / promoted-merchant boost
-#   user_pref  - long-term user preference memory match
-INTENT_WEIGHTS: dict[str, dict[str, float]] = {
-    "recommendation": {
-        "dense": 0.15,
-        "lexical": 0.10,
-        "constraint": 0.20,
-        "rating": 0.15,
-        "business": 0.10,
-        "user_pref": 0.10,
-        "cross_encoder": 0.20,
-    },
-    "knowledge": {
-        "dense": 0.25,
-        "lexical": 0.20,
-        "constraint": 0.10,
-        "rating": 0.10,
-        "business": 0.05,
-        "user_pref": 0.10,
-        "cross_encoder": 0.20,
-    },
-    "default": {
-        "dense": 0.20,
-        "lexical": 0.15,
-        "constraint": 0.15,
-        "rating": 0.10,
-        "business": 0.10,
-        "user_pref": 0.10,
-        "cross_encoder": 0.20,
-    },
-}
+INTENT_WEIGHTS: dict[str, dict[str, float]] = get_config().rag.intent_weights
 
 
 class WeightedReranker:

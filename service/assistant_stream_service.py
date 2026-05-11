@@ -3,10 +3,11 @@ from __future__ import annotations
 import uuid
 from typing import AsyncIterator
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from service.agent_runtime.graph import build_agent_graph
 from service.agent_runtime.nodes import LocalActionExecutor
+from service.assistant_service import _conversation_store
 from service.rag.retriever import AdvancedRagRetriever
 from service.user_memory_service import UserMemoryService
 
@@ -31,8 +32,12 @@ class AssistantStreamService:
         session_id = session_id or str(uuid.uuid4())
         self._ensure_graph()
 
+        history = _conversation_store.get_history(session_id)
+        new_message = HumanMessage(content=message)
+        messages = history + [new_message]
+
         initial_state = {
-            "messages": [HumanMessage(content=message)],
+            "messages": messages,
             "session_id": session_id,
             "user_id": user_id,
             "loaded_user_memories": [],
@@ -44,6 +49,7 @@ class AssistantStreamService:
         }
 
         config = {"configurable": {"thread_id": session_id}}
+        response_message = ""
 
         async for event in self._graph.astream_events(initial_state, config=config, version="v2"):
             kind = event.get("event", "")
@@ -55,6 +61,11 @@ class AssistantStreamService:
                 output = event.get("data", {}).get("output", {})
                 payload = output.get("response_payload")
                 if payload:
+                    response_message = payload.get("message", "")
                     yield {"type": "payload", "data": payload}
+
+        _conversation_store.append(session_id, new_message)
+        if response_message:
+            _conversation_store.append(session_id, AIMessage(content=response_message))
 
         yield {"type": "done"}

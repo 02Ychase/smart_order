@@ -1,3 +1,4 @@
+from service.config import AppConfig, set_config
 from service.guardrails import InputGuardrail, OutputGuardrail
 
 
@@ -34,3 +35,18 @@ def test_output_guardrail_flags_hallucinated_price():
     result = guardrail.check("辣椒炒肉只要15元，非常划算", evidence)
     assert result.allowed is False
     assert "hallucination" in result.reason
+
+
+def test_input_guardrail_respects_config_disable():
+    from service.agent_runtime.nodes import _reset_input_guardrail, input_guardrail_node
+    config = AppConfig(guardrails=AppConfig.GuardrailConfig(enable_input_guardrail=False))
+    set_config(config)
+    _reset_input_guardrail()
+    try:
+        result = input_guardrail_node({
+            "messages": [],
+        })
+        assert result["guardrail_blocked"] is False
+    finally:
+        set_config(AppConfig())
+        _reset_input_guardrail()

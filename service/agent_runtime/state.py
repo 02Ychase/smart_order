@@ -26,14 +26,6 @@ class GraphToolCall:
 
 
 @dataclass
-class PlanStep:
-    step_index: int
-    tool_call: GraphToolCall
-    status: Literal["pending", "completed", "failed"] = "pending"
-    result: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
 class AgentPlan:
     intent: AgentIntent
     normalized_query: str = ""
@@ -65,8 +57,6 @@ class SmartOrderAgentState(TypedDict):
     response_payload: NotRequired[dict[str, Any]]
     iteration_count: NotRequired[int]
     max_iterations: NotRequired[int]
-    plan_steps: NotRequired[list[dict[str, Any]]]
-    current_step_index: NotRequired[int]
     metrics: NotRequired[dict[str, Any]]
     guardrail_blocked: NotRequired[bool]
     guardrail_reason: NotRequired[str]
