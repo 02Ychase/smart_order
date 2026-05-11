@@ -18,11 +18,54 @@ def latest_user_message(state: dict) -> str:
     return ""
 
 
+_input_guardrail = None
+
+
+def _get_input_guardrail():
+    global _input_guardrail
+    if _input_guardrail is None:
+        from service.config import get_config
+        from service.guardrails import InputGuardrail
+        _input_guardrail = InputGuardrail(max_length=get_config().guardrails.max_input_length)
+    return _input_guardrail
+
+
+def _reset_input_guardrail():
+    global _input_guardrail
+    _input_guardrail = None
+
+
+def input_guardrail_node(state: dict) -> dict:
+    from service.config import get_config
+
+    if not get_config().guardrails.enable_input_guardrail:
+        return {"guardrail_blocked": False}
+
+    guardrail = _get_input_guardrail()
+    user_message = latest_user_message(state)
+    result = guardrail.check(user_message)
+
+    if not result.allowed:
+        logger.warning("Input guardrail blocked: %s", result.reason)
+        return {"guardrail_blocked": True, "guardrail_reason": result.reason}
+
+    return {"guardrail_blocked": False}
+
+
 def load_memory_node(state: dict, memory_service=None) -> dict:
+    from service.observability import MetricsCollector
+    collector = MetricsCollector()
+    collector.set_metadata("session_id", state.get("session_id"))
+    collector.set_metadata("user_id", state.get("user_id"))
+
     user_id = state.get("user_id")
     if user_id is None or memory_service is None:
-        return {"loaded_user_memories": []}
-    return {"loaded_user_memories": memory_service.list_memories(user_id)}
+        return {"loaded_user_memories": [], "metrics": collector.to_log_dict()}
+
+    with collector.timer("load_memory"):
+        memories = memory_service.list_memories(user_id)
+
+    return {"loaded_user_memories": memories, "metrics": collector.to_log_dict()}
 
 
 def memory_writer_node(state: dict, memory_service=None) -> dict:
@@ -100,17 +143,32 @@ def route_after_plan(state: dict) -> str:
         return "respond"
 
     has_evidence = bool(state.get("recent_evidence"))
-    if has_evidence and plan.intent in {"recommendation", "knowledge"}:
+    completed_tools = {r.get("type", "") for r in state.get("tool_results", [])}
+
+    remaining_calls = [c for c in plan.tool_calls if c.tool_name not in completed_tools]
+
+    if has_evidence and plan.intent in {"recommendation", "knowledge"} and not any(
+        c.tool_name in ACTION_TOOL_NAMES for c in remaining_calls
+    ):
         logger.debug("Agent route: evidence already present, intent=%s → respond", plan.intent)
         return "respond"
 
     if plan.intent == "undo_action":
         logger.debug("Agent route: undo_action → undo")
         return "undo"
-    if plan.requires_rag or any(call.tool_name in RAG_TOOL_NAMES for call in plan.tool_calls):
+
+    next_call = remaining_calls[0] if remaining_calls else None
+
+    if plan.requires_rag and not has_evidence:
         logger.debug("Agent route: intent=%s requires_rag=%s → rag", plan.intent, plan.requires_rag)
         return "rag"
-    if any(call.tool_name in ACTION_TOOL_NAMES for call in plan.tool_calls):
+
+    if next_call is None:
+        return "respond"
+
+    if next_call.tool_name in RAG_TOOL_NAMES:
+        return "rag"
+    if next_call.tool_name in ACTION_TOOL_NAMES:
         logger.debug("Agent route: action tool → action")
         return "action"
     logger.debug("Agent route: intent=%s → respond", plan.intent)
@@ -119,26 +177,42 @@ def route_after_plan(state: dict) -> str:
 
 def evaluate_node(state: dict) -> dict:
     iteration = state.get("iteration_count", 0) + 1
-    max_iter = state.get("max_iterations", 2)
+    max_iter = state.get("max_iterations", 5)
     logger.debug("Agent evaluate: iteration=%d/%d", iteration, max_iter)
 
     if iteration >= max_iter:
-        logger.debug("Agent evaluate: max iterations reached → write_memory")
+        logger.debug("Agent evaluate: max iterations reached → respond")
         return {"iteration_count": iteration, "_next": "respond"}
 
     plan = state.get("current_plan")
+    if plan is None:
+        return {"iteration_count": iteration, "_next": "respond"}
+
+    completed_tools = {r.get("type", "") for r in state.get("tool_results", [])}
+    pending_calls = [
+        call for call in plan.tool_calls
+        if call.tool_name not in completed_tools
+    ]
+
+    has_pending_action = any(call.tool_name in ACTION_TOOL_NAMES for call in pending_calls)
+    has_pending_rag = any(call.tool_name in RAG_TOOL_NAMES for call in pending_calls)
+
+    if has_pending_rag:
+        logger.debug("Agent evaluate: pending RAG calls → plan (re-route to rag)")
+        return {"iteration_count": iteration, "_next": "plan"}
+
+    if has_pending_action:
+        logger.debug("Agent evaluate: pending action calls → plan (re-route to action)")
+        return {"iteration_count": iteration, "_next": "plan"}
+
     has_evidence = bool(state.get("recent_evidence"))
     has_tool_results = bool(state.get("tool_results"))
 
-    if has_evidence and plan and plan.intent == "recommendation":
-        logger.debug("Agent evaluate: evidence collected → write_memory")
+    if has_evidence or has_tool_results:
+        logger.debug("Agent evaluate: all steps done → respond")
         return {"iteration_count": iteration, "_next": "respond"}
 
-    if has_tool_results:
-        logger.debug("Agent evaluate: action completed → write_memory")
-        return {"iteration_count": iteration, "_next": "respond"}
-
-    logger.debug("Agent evaluate: looping back → plan")
+    logger.debug("Agent evaluate: no results yet → plan")
     return {"iteration_count": iteration, "_next": "plan"}
 
 
@@ -209,6 +283,105 @@ class LocalActionExecutor:
                 "message": result["natural_summary"],
                 "undo_available": True,
             }
+
+        if call.tool_name == "add_to_cart":
+            from service.tools.cart_tool import add_to_cart_tool
+
+            dish_id = call.arguments.get("dish_id")
+            quantity = call.arguments.get("quantity", 1)
+            if dish_id is None:
+                return {
+                    "success": False,
+                    "message": "缺少 dish_id 参数",
+                    "undo_available": False,
+                }
+            add_result = add_to_cart_tool(
+                user_id=user_id, dish_id=int(dish_id), quantity=int(quantity), session=self.session,
+            )
+            journal = ActionJournalService(self.session).record_completed_action(
+                session_id=session_id,
+                user_id=user_id,
+                action_type="add_to_cart",
+                undo_policy="remove_item",
+                before_snapshot={},
+                after_snapshot={"dish_id": dish_id, "quantity": quantity},
+                undo_tool="remove_from_cart",
+                natural_summary=f"已将菜品加入购物车",
+            )
+            action_id = self._record_value(journal, "action_id")
+            return {
+                "success": True,
+                "action_id": action_id,
+                "message": f"已将菜品加入购物车",
+                "undo_available": True,
+                "data": add_result,
+            }
+
+        if call.tool_name == "remove_from_cart":
+            from service.cart_service import CartService
+
+            dish_id = call.arguments.get("dish_id")
+            if dish_id is None:
+                return {"success": False, "message": "缺少 dish_id 参数", "undo_available": False}
+            cart_service = CartService(self.session)
+            cart_service.remove_item(user_id, int(dish_id))
+            return {
+                "success": True,
+                "action_id": None,
+                "message": "已从购物车移除",
+                "undo_available": False,
+            }
+
+        if call.tool_name == "save_address":
+            from service.tools.address_tool import commit_address_action_tool
+
+            address_data = call.arguments
+            result = commit_address_action_tool(user_id=user_id, address=address_data, session=self.session)
+            journal = ActionJournalService(self.session).record_completed_action(
+                session_id=session_id,
+                user_id=user_id,
+                action_type="save_address",
+                undo_policy="none",
+                before_snapshot={},
+                after_snapshot=address_data,
+                undo_tool="",
+                natural_summary="已保存配送地址",
+            )
+            action_id = self._record_value(journal, "action_id")
+            return {
+                "success": True,
+                "action_id": action_id,
+                "message": "已保存配送地址",
+                "undo_available": False,
+                "data": result,
+            }
+
+        if call.tool_name == "upsert_preference":
+            from service.tools.preference_tool import upsert_preference_tool
+
+            memory_type = call.arguments.get("memory_type", "food_preference")
+            content = call.arguments.get("content", "")
+            result = upsert_preference_tool(
+                user_id=user_id, memory_type=memory_type, content=content, session=self.session,
+            )
+            journal = ActionJournalService(self.session).record_completed_action(
+                session_id=session_id,
+                user_id=user_id,
+                action_type="upsert_preference",
+                undo_policy=result.get("undo_policy", "none"),
+                before_snapshot=result.get("before_snapshot", {}),
+                after_snapshot=result.get("after_snapshot", {}),
+                undo_tool=result.get("undo_tool", ""),
+                natural_summary="已更新用户偏好",
+            )
+            action_id = self._record_value(journal, "action_id")
+            return {
+                "success": True,
+                "action_id": action_id,
+                "message": "已更新用户偏好",
+                "undo_available": True,
+            }
+
         return {
             "success": False,
             "message": f"unsupported action tool: {call.tool_name}",
@@ -279,6 +452,29 @@ def _normalize_tool_result(result: dict, state: dict) -> dict:
 
 
 def respond_node(state: dict, use_llm: bool = True) -> dict:
+    # Handle guardrail-blocked requests
+    if state.get("guardrail_blocked"):
+        message = "抱歉，您的请求无法处理。请尝试换一种方式提问。"
+        payload = {
+            "session_id": state.get("session_id"),
+            "message": message,
+            "response_type": "guardrail_blocked",
+            "needs_clarification": False,
+            "clarification_question": None,
+            "extracted_constraints": None,
+            "recommendations": [],
+            "comparisons": [],
+            "citations": [],
+            "suggested_actions": [],
+            "pending_action": None,
+            "executed_actions": [],
+            "undo_available": False,
+        }
+        return {
+            "messages": state.get("messages", []) + [AIMessage(content=message)],
+            "response_payload": payload,
+        }
+
     plan = state.get("current_plan")
     evidence = state.get("recent_evidence", [])
     response_type = _external_response_type(plan, state)
@@ -298,6 +494,15 @@ def respond_node(state: dict, use_llm: bool = True) -> dict:
     else:
         message = "我没有找到足够匹配的结果，可以换个说法再试。"
 
+    if evidence and use_llm:
+        from service.config import get_config
+        if get_config().guardrails.enable_output_guardrail:
+            from service.guardrails import OutputGuardrail
+            output_result = OutputGuardrail().check(message, evidence)
+            if not output_result.allowed:
+                logger.warning("Output guardrail triggered: %s, falling back to template", output_result.reason)
+                message = _template_recommendation(recommendations)
+
     payload = {
         "session_id": state.get("session_id"),
         "message": message,
@@ -313,6 +518,14 @@ def respond_node(state: dict, use_llm: bool = True) -> dict:
         "executed_actions": tool_results,
         "undo_available": bool(state.get("recent_action_ids")),
     }
+
+    from service.observability import MetricsCollector
+    collector = MetricsCollector()
+    collector.set_metadata("response_type", response_type)
+    collector.set_metadata("evidence_count", len(evidence))
+    collector.set_metadata("tool_results_count", len(tool_results))
+    collector.emit("agent_respond")
+
     return {
         "messages": state.get("messages", []) + [AIMessage(content=message)],
         "response_payload": payload,

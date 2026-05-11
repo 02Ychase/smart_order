@@ -359,3 +359,24 @@ def test_planner_structured_output_falls_back_to_legacy_llm_on_failure() -> None
 
     assert plan.intent == "greeting"
     assert plan.normalized_query == "你好"
+
+
+def test_plan_add_to_cart_intent():
+    planner = LangGraphAgentPlanner()
+    plan = planner._rule_plan("帮我把宫保鸡丁加到购物车")
+    assert plan.intent == "cart_action"
+    assert any(call.tool_name == "add_to_cart" for call in plan.tool_calls)
+
+
+def test_plan_save_address_intent():
+    planner = LangGraphAgentPlanner()
+    plan = planner._rule_plan("帮我保存地址：上海市静安区南京西路100号")
+    assert plan.intent == "address_action"
+    assert any(call.tool_name == "save_address" for call in plan.tool_calls)
+
+
+def test_plan_preference_intent():
+    planner = LangGraphAgentPlanner()
+    plan = planner._rule_plan("我不吃花生，记住我的偏好")
+    assert plan.intent == "preference_action"
+    assert any(call.tool_name == "upsert_preference" for call in plan.tool_calls)

@@ -57,3 +57,6 @@ class SmartOrderAgentState(TypedDict):
     response_payload: NotRequired[dict[str, Any]]
     iteration_count: NotRequired[int]
     max_iterations: NotRequired[int]
+    metrics: NotRequired[dict[str, Any]]
+    guardrail_blocked: NotRequired[bool]
+    guardrail_reason: NotRequired[str]

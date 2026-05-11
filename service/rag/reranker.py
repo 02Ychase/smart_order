@@ -3,11 +3,12 @@ from __future__ import annotations
 import logging
 import math
 import os
-from functools import lru_cache
 from http import HTTPStatus
 
 import dashscope
 
+from service.cache import TieredCache
+from service.config import get_config
 from service.rag.models import FusedCandidate, RagQueryPlan
 
 logger = logging.getLogger(__name__)
@@ -21,48 +22,15 @@ _EMBEDDING_CACHE_SIZE = 2048
 # Feature flag: set to "legacy" to use keyword matching, "embedding" for embedding-based
 _EMBEDDING_MODE = os.getenv("USER_PREF_MATCH_MODE", "embedding")
 
-# Intent-based weight profiles for dynamic reranking.
-# Each profile distributes 1.0 total weight across six scoring factors:
-#   dense      - semantic vector similarity
-#   lexical    - keyword / BM25 text match
-#   constraint - hard-filter / cuisine / flavor alignment
-#   rating     - merchant average rating (0-5)
-#   business   - recommended-dish / promoted-merchant boost
-#   user_pref  - long-term user preference memory match
-INTENT_WEIGHTS: dict[str, dict[str, float]] = {
-    "recommendation": {
-        "dense": 0.25,
-        "lexical": 0.15,
-        "constraint": 0.25,
-        "rating": 0.15,
-        "business": 0.10,
-        "user_pref": 0.10,
-    },
-    "knowledge": {
-        "dense": 0.35,
-        "lexical": 0.25,
-        "constraint": 0.15,
-        "rating": 0.10,
-        "business": 0.05,
-        "user_pref": 0.10,
-    },
-    "default": {
-        "dense": 0.30,
-        "lexical": 0.20,
-        "constraint": 0.20,
-        "rating": 0.10,
-        "business": 0.10,
-        "user_pref": 0.10,
-    },
-}
+INTENT_WEIGHTS: dict[str, dict[str, float]] = get_config().rag.intent_weights
 
 
 class WeightedReranker:
     def _get_weights_for_intent(self, intent: str) -> dict[str, float]:
         """Return the weight profile for a given intent, falling back to 'default'."""
-        if intent in INTENT_WEIGHTS:
-            return INTENT_WEIGHTS[intent]
-        return INTENT_WEIGHTS["default"]
+        config = get_config().rag
+        weights = config.intent_weights
+        return weights.get(intent, weights.get("default", {}))
 
     def rerank(
         self,
@@ -98,6 +66,7 @@ class WeightedReranker:
                 + weights["rating"] * merchant_rating
                 + weights["business"] * business_boost
                 + weights["user_pref"] * user_pref_score
+                + weights.get("cross_encoder", 0.0) * candidate.cross_encoder_score
             )
         return sorted(candidates, key=lambda item: item.final_score, reverse=True)
 
@@ -180,12 +149,15 @@ def _calc_user_preference_match(
     return score / weight_sum
 
 
-@lru_cache(maxsize=_EMBEDDING_CACHE_SIZE)
+_embedding_cache = TieredCache(l1_max_size=_EMBEDDING_CACHE_SIZE)
+
+
 def _get_embedding_cached(text: str) -> tuple[float, ...] | None:
-    """Get embedding vector for text via DashScope, cached by LRU.
-    
-    Returns a tuple (hashable for lru_cache) or None on failure.
-    """
+    """Get embedding vector for text via DashScope, cached by TieredCache."""
+    cached = _embedding_cache.get(text)
+    if cached is not None:
+        return cached
+
     api_key = os.getenv("DASHSCOPE_API_KEY")
     if not api_key:
         logger.warning("DASHSCOPE_API_KEY not set — embedding unavailable")
@@ -200,12 +172,19 @@ def _get_embedding_cached(text: str) -> tuple[float, ...] | None:
         if resp["status_code"] == HTTPStatus.OK:
             embedding = resp.get("output", {}).get("embeddings", [{}])[0].get("embedding")
             if embedding and len(embedding) == _EMBEDDING_DIMENSION:
-                return tuple(embedding)
+                result = tuple(embedding)
+                _embedding_cache.set(text, result)
+                return result
         logger.error(f"Embedding request failed: status={resp.get('status_code')}")
         return None
     except Exception as e:
         logger.error(f"Embedding request failed: {e}")
         return None
+
+
+# Expose cache_clear for backward compatibility with tests
+def cache_clear():
+    _embedding_cache.clear()
 
 
 def cosine_similarity(vec1: list[float] | tuple[float, ...], vec2: list[float] | tuple[float, ...]) -> float:

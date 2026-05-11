@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 RAG_TOOL_NAMES = {"recommend_dishes", "search_catalog"}
-ACTION_TOOL_NAMES = {"cart_clear"}
+ACTION_TOOL_NAMES = {"cart_clear", "add_to_cart", "remove_from_cart", "save_address", "upsert_preference"}
 UNDO_TOOL_NAMES = {"undo_last_action"}
 ALLOWED_TOOL_NAMES = RAG_TOOL_NAMES | ACTION_TOOL_NAMES | UNDO_TOOL_NAMES
 SEARCH_TOOL_ALIASES = {
@@ -322,6 +322,34 @@ class LangGraphAgentPlanner:
             return AgentPlan(
                 intent="cart_action",
                 tool_calls=[GraphToolCall(tool_name="cart_clear", writes_database=True)],
+                should_answer_directly=True,
+            )
+
+        if "购物车" in message and any(term in message for term in ("加", "添加", "放入", "加入")):
+            return AgentPlan(
+                intent="cart_action",
+                tool_calls=[GraphToolCall(tool_name="add_to_cart", writes_database=True)],
+                should_answer_directly=True,
+            )
+
+        if "购物车" in message and any(term in message for term in ("删", "移除", "去掉", "不要")):
+            return AgentPlan(
+                intent="cart_action",
+                tool_calls=[GraphToolCall(tool_name="remove_from_cart", writes_database=True)],
+                should_answer_directly=True,
+            )
+
+        if any(term in message for term in ("保存地址", "加入地址", "地址管理")):
+            return AgentPlan(
+                intent="address_action",
+                tool_calls=[GraphToolCall(tool_name="save_address", writes_database=True)],
+                should_answer_directly=True,
+            )
+
+        if any(term in message for term in ("偏好", "记住我", "不吃", "过敏")):
+            return AgentPlan(
+                intent="preference_action",
+                tool_calls=[GraphToolCall(tool_name="upsert_preference", writes_database=True)],
                 should_answer_directly=True,
             )
 

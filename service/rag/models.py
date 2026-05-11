@@ -44,6 +44,7 @@ class FusedCandidate:
     dense_score: float = 0.0
     lexical_score: float = 0.0
     constraint_match: float = 1.0
+    cross_encoder_score: float = 0.0
     final_score: float = 0.0
 
 
