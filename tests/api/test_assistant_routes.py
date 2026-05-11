@@ -34,7 +34,7 @@ class StubAssistantService:
     def __init__(self, session):
         self.session = session
 
-    def chat(self, request):
+    async def async_chat(self, request):
         return {
             "session_id": "session-123",
             "message": "这里有几种川菜推荐",
@@ -111,7 +111,7 @@ def test_assistant_chat_can_return_pending_action(assistant_test_context, monkey
         def __init__(self, session):
             pass
 
-        def chat(self, request):
+        async def async_chat(self, request):
             return {
                 "session_id": request.session_id or "s1",
                 "message": "是否加入购物车？",
