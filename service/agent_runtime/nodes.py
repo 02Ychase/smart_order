@@ -100,17 +100,32 @@ def route_after_plan(state: dict) -> str:
         return "respond"
 
     has_evidence = bool(state.get("recent_evidence"))
-    if has_evidence and plan.intent in {"recommendation", "knowledge"}:
+    completed_tools = {r.get("type", "") for r in state.get("tool_results", [])}
+
+    remaining_calls = [c for c in plan.tool_calls if c.tool_name not in completed_tools]
+
+    if has_evidence and plan.intent in {"recommendation", "knowledge"} and not any(
+        c.tool_name in ACTION_TOOL_NAMES for c in remaining_calls
+    ):
         logger.debug("Agent route: evidence already present, intent=%s → respond", plan.intent)
         return "respond"
 
     if plan.intent == "undo_action":
         logger.debug("Agent route: undo_action → undo")
         return "undo"
-    if plan.requires_rag or any(call.tool_name in RAG_TOOL_NAMES for call in plan.tool_calls):
+
+    next_call = remaining_calls[0] if remaining_calls else None
+
+    if plan.requires_rag and not has_evidence:
         logger.debug("Agent route: intent=%s requires_rag=%s → rag", plan.intent, plan.requires_rag)
         return "rag"
-    if any(call.tool_name in ACTION_TOOL_NAMES for call in plan.tool_calls):
+
+    if next_call is None:
+        return "respond"
+
+    if next_call.tool_name in RAG_TOOL_NAMES:
+        return "rag"
+    if next_call.tool_name in ACTION_TOOL_NAMES:
         logger.debug("Agent route: action tool → action")
         return "action"
     logger.debug("Agent route: intent=%s → respond", plan.intent)
@@ -119,26 +134,42 @@ def route_after_plan(state: dict) -> str:
 
 def evaluate_node(state: dict) -> dict:
     iteration = state.get("iteration_count", 0) + 1
-    max_iter = state.get("max_iterations", 2)
+    max_iter = state.get("max_iterations", 5)
     logger.debug("Agent evaluate: iteration=%d/%d", iteration, max_iter)
 
     if iteration >= max_iter:
-        logger.debug("Agent evaluate: max iterations reached → write_memory")
+        logger.debug("Agent evaluate: max iterations reached → respond")
         return {"iteration_count": iteration, "_next": "respond"}
 
     plan = state.get("current_plan")
+    if plan is None:
+        return {"iteration_count": iteration, "_next": "respond"}
+
+    completed_tools = {r.get("type", "") for r in state.get("tool_results", [])}
+    pending_calls = [
+        call for call in plan.tool_calls
+        if call.tool_name not in completed_tools
+    ]
+
+    has_pending_action = any(call.tool_name in ACTION_TOOL_NAMES for call in pending_calls)
+    has_pending_rag = any(call.tool_name in RAG_TOOL_NAMES for call in pending_calls)
+
+    if has_pending_rag:
+        logger.debug("Agent evaluate: pending RAG calls → plan (re-route to rag)")
+        return {"iteration_count": iteration, "_next": "plan"}
+
+    if has_pending_action:
+        logger.debug("Agent evaluate: pending action calls → plan (re-route to action)")
+        return {"iteration_count": iteration, "_next": "plan"}
+
     has_evidence = bool(state.get("recent_evidence"))
     has_tool_results = bool(state.get("tool_results"))
 
-    if has_evidence and plan and plan.intent == "recommendation":
-        logger.debug("Agent evaluate: evidence collected → write_memory")
+    if has_evidence or has_tool_results:
+        logger.debug("Agent evaluate: all steps done → respond")
         return {"iteration_count": iteration, "_next": "respond"}
 
-    if has_tool_results:
-        logger.debug("Agent evaluate: action completed → write_memory")
-        return {"iteration_count": iteration, "_next": "respond"}
-
-    logger.debug("Agent evaluate: looping back → plan")
+    logger.debug("Agent evaluate: no results yet → plan")
     return {"iteration_count": iteration, "_next": "plan"}
 
 

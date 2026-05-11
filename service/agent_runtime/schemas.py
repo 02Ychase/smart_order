@@ -69,7 +69,8 @@ class AgentPlanSchema(BaseModel):
     )
     tool_calls: list[GraphToolCallSchema] = Field(
         default_factory=list,
-        description="Ordered list of tool calls to execute",
+        description="Ordered list of tool calls to execute SEQUENTIALLY. Each call is a step. "
+                    "For multi-step tasks (e.g., search then add_to_cart), list them in execution order.",
     )
     should_answer_directly: bool = Field(
         default=True,
