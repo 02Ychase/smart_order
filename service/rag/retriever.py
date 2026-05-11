@@ -17,11 +17,9 @@ from service.rag.query_planner import RagQueryPlanner
 from service.rag.recall import BusinessRecallRoute, DenseVectorRecallRoute, SparseVectorRecallRoute, SqlCatalogRecallRoute
 from service.rag.reranker import WeightedReranker
 from service.rag.cross_encoder import CrossEncoderReranker
+from service.config import get_config
 
 logger = logging.getLogger(__name__)
-
-_CACHE_MAX_SIZE = 128
-_CACHE_TTL_SECONDS = 300
 
 
 class AdvancedRagRetriever:
@@ -123,7 +121,7 @@ class AdvancedRagRetriever:
         if entry is None:
             return None
         ts, data = entry
-        if time.monotonic() - ts > _CACHE_TTL_SECONDS:
+        if time.monotonic() - ts > get_config().rag.cache_ttl_seconds:
             del self._cache[key]
             return None
         self._cache.move_to_end(key)
@@ -133,7 +131,7 @@ class AdvancedRagRetriever:
         if key in self._cache:
             self._cache.move_to_end(key)
         else:
-            while len(self._cache) >= _CACHE_MAX_SIZE:
+            while len(self._cache) >= get_config().rag.cache_max_size:
                 self._cache.popitem(last=False)
             self._cache[key] = (time.monotonic(), data)
 

@@ -8,6 +8,7 @@ from http import HTTPStatus
 import dashscope
 
 from service.cache import TieredCache
+from service.config import get_config
 from service.rag.models import FusedCandidate, RagQueryPlan
 
 logger = logging.getLogger(__name__)
@@ -63,9 +64,9 @@ INTENT_WEIGHTS: dict[str, dict[str, float]] = {
 class WeightedReranker:
     def _get_weights_for_intent(self, intent: str) -> dict[str, float]:
         """Return the weight profile for a given intent, falling back to 'default'."""
-        if intent in INTENT_WEIGHTS:
-            return INTENT_WEIGHTS[intent]
-        return INTENT_WEIGHTS["default"]
+        config = get_config().rag
+        weights = config.intent_weights
+        return weights.get(intent, weights.get("default", {}))
 
     def rerank(
         self,
