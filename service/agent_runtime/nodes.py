@@ -209,6 +209,105 @@ class LocalActionExecutor:
                 "message": result["natural_summary"],
                 "undo_available": True,
             }
+
+        if call.tool_name == "add_to_cart":
+            from service.tools.cart_tool import add_to_cart_tool
+
+            dish_id = call.arguments.get("dish_id")
+            quantity = call.arguments.get("quantity", 1)
+            if dish_id is None:
+                return {
+                    "success": False,
+                    "message": "缺少 dish_id 参数",
+                    "undo_available": False,
+                }
+            add_result = add_to_cart_tool(
+                user_id=user_id, dish_id=int(dish_id), quantity=int(quantity), session=self.session,
+            )
+            journal = ActionJournalService(self.session).record_completed_action(
+                session_id=session_id,
+                user_id=user_id,
+                action_type="add_to_cart",
+                undo_policy="remove_item",
+                before_snapshot={},
+                after_snapshot={"dish_id": dish_id, "quantity": quantity},
+                undo_tool="remove_from_cart",
+                natural_summary=f"已将菜品加入购物车",
+            )
+            action_id = self._record_value(journal, "action_id")
+            return {
+                "success": True,
+                "action_id": action_id,
+                "message": f"已将菜品加入购物车",
+                "undo_available": True,
+                "data": add_result,
+            }
+
+        if call.tool_name == "remove_from_cart":
+            from service.cart_service import CartService
+
+            dish_id = call.arguments.get("dish_id")
+            if dish_id is None:
+                return {"success": False, "message": "缺少 dish_id 参数", "undo_available": False}
+            cart_service = CartService(self.session)
+            cart_service.remove_item(user_id, int(dish_id))
+            return {
+                "success": True,
+                "action_id": None,
+                "message": "已从购物车移除",
+                "undo_available": False,
+            }
+
+        if call.tool_name == "save_address":
+            from service.tools.address_tool import commit_address_action_tool
+
+            address_data = call.arguments
+            result = commit_address_action_tool(user_id=user_id, address=address_data, session=self.session)
+            journal = ActionJournalService(self.session).record_completed_action(
+                session_id=session_id,
+                user_id=user_id,
+                action_type="save_address",
+                undo_policy="none",
+                before_snapshot={},
+                after_snapshot=address_data,
+                undo_tool="",
+                natural_summary="已保存配送地址",
+            )
+            action_id = self._record_value(journal, "action_id")
+            return {
+                "success": True,
+                "action_id": action_id,
+                "message": "已保存配送地址",
+                "undo_available": False,
+                "data": result,
+            }
+
+        if call.tool_name == "upsert_preference":
+            from service.tools.preference_tool import upsert_preference_tool
+
+            memory_type = call.arguments.get("memory_type", "food_preference")
+            content = call.arguments.get("content", "")
+            result = upsert_preference_tool(
+                user_id=user_id, memory_type=memory_type, content=content, session=self.session,
+            )
+            journal = ActionJournalService(self.session).record_completed_action(
+                session_id=session_id,
+                user_id=user_id,
+                action_type="upsert_preference",
+                undo_policy=result.get("undo_policy", "none"),
+                before_snapshot=result.get("before_snapshot", {}),
+                after_snapshot=result.get("after_snapshot", {}),
+                undo_tool=result.get("undo_tool", ""),
+                natural_summary="已更新用户偏好",
+            )
+            action_id = self._record_value(journal, "action_id")
+            return {
+                "success": True,
+                "action_id": action_id,
+                "message": "已更新用户偏好",
+                "undo_available": True,
+            }
+
         return {
             "success": False,
             "message": f"unsupported action tool: {call.tool_name}",

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 RAG_TOOL_NAMES = {"recommend_dishes", "search_catalog"}
-ACTION_TOOL_NAMES = {"cart_clear"}
+ACTION_TOOL_NAMES = {"cart_clear", "add_to_cart", "remove_from_cart", "save_address", "upsert_preference"}
 UNDO_TOOL_NAMES = {"undo_last_action"}
 ALLOWED_TOOL_NAMES = RAG_TOOL_NAMES | ACTION_TOOL_NAMES | UNDO_TOOL_NAMES
 SEARCH_TOOL_ALIASES = {
