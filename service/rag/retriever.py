@@ -16,6 +16,7 @@ from service.rag.models import FusedCandidate, RagEvidence
 from service.rag.query_planner import RagQueryPlanner
 from service.rag.recall import BusinessRecallRoute, DenseVectorRecallRoute, SparseVectorRecallRoute, SqlCatalogRecallRoute
 from service.rag.reranker import WeightedReranker
+from service.rag.cross_encoder import CrossEncoderReranker
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ class AdvancedRagRetriever:
                     BusinessRecallRoute(catalog_service),
                 ])
         self.reranker = reranker or WeightedReranker()
+        self.cross_encoder = CrossEncoderReranker()
         self._cache: OrderedDict[str, tuple[float, list[dict[str, Any]]]] = OrderedDict()
 
     def retrieve(self, original_query: str, agent_plan: AgentPlan, memories: list[dict] | None = None, limit: int = 5) -> list[RagEvidence]:
@@ -59,6 +61,11 @@ class AdvancedRagRetriever:
 
         filtered = apply_hard_filters(fused, plan)
         logger.debug("RAG filter: %d candidates after hard filters (removed %d)", len(filtered), len(fused) - len(filtered))
+
+        # Cross-encoder reranking (after hard filters, before weighted rerank)
+        if len(filtered) > 3:
+            filtered = self.cross_encoder.rerank(original_query, filtered, top_k=min(20, len(filtered)))
+            logger.debug("RAG cross-encoder: %d candidates after reranking", len(filtered))
 
         ranked = self.reranker.rerank(filtered, original_query=original_query, query_plan=plan, memories=memories or [])
         ranked = self._apply_result_ordering(ranked, plan)

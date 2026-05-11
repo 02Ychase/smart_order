@@ -31,28 +31,31 @@ _EMBEDDING_MODE = os.getenv("USER_PREF_MATCH_MODE", "embedding")
 #   user_pref  - long-term user preference memory match
 INTENT_WEIGHTS: dict[str, dict[str, float]] = {
     "recommendation": {
-        "dense": 0.25,
-        "lexical": 0.15,
-        "constraint": 0.25,
-        "rating": 0.15,
-        "business": 0.10,
-        "user_pref": 0.10,
-    },
-    "knowledge": {
-        "dense": 0.35,
-        "lexical": 0.25,
-        "constraint": 0.15,
-        "rating": 0.10,
-        "business": 0.05,
-        "user_pref": 0.10,
-    },
-    "default": {
-        "dense": 0.30,
-        "lexical": 0.20,
+        "dense": 0.20,
+        "lexical": 0.10,
         "constraint": 0.20,
         "rating": 0.10,
         "business": 0.10,
         "user_pref": 0.10,
+        "cross_encoder": 0.20,
+    },
+    "knowledge": {
+        "dense": 0.25,
+        "lexical": 0.15,
+        "constraint": 0.10,
+        "rating": 0.10,
+        "business": 0.05,
+        "user_pref": 0.10,
+        "cross_encoder": 0.25,
+    },
+    "default": {
+        "dense": 0.20,
+        "lexical": 0.15,
+        "constraint": 0.15,
+        "rating": 0.10,
+        "business": 0.10,
+        "user_pref": 0.10,
+        "cross_encoder": 0.20,
     },
 }
 
@@ -98,6 +101,7 @@ class WeightedReranker:
                 + weights["rating"] * merchant_rating
                 + weights["business"] * business_boost
                 + weights["user_pref"] * user_pref_score
+                + weights.get("cross_encoder", 0.0) * candidate.cross_encoder_score
             )
         return sorted(candidates, key=lambda item: item.final_score, reverse=True)
 
