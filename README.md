@@ -1,14 +1,16 @@
 # Smart Order — 智能外卖助手
 
-AI-Powered Food Delivery Assistant
+AI-Powered Food Delivery Assistant with Enterprise-Grade Agent & RAG Pipeline
 
 ---
 
 ## 📖 Overview · 项目简介
 
-**Smart Order** is a full-stack food delivery system built around an **AI Agent** (LangGraph) and **RAG** (Retrieval-Augmented Generation) pipeline. Users can browse merchants, manage carts, place orders, and have natural-language conversations with the AI assistant for dish recommendations, order management, and delivery inquiries.
+**Smart Order** is a full-stack food delivery system built around an **AI Agent** (LangGraph state machine) and an **enterprise-grade RAG** (Retrieval-Augmented Generation) pipeline. Users can browse merchants, manage carts, place orders, and have natural-language conversations with the AI assistant for dish recommendations, order management, and delivery inquiries.
 
-**智能外卖助手** 是一个全栈外卖点餐系统，核心是基于 **AI Agent**（LangGraph）和 **RAG**（检索增强生成）管线的 AI 助手。用户可浏览商家、管理购物车、下单，并通过自然语言与 AI 助手交互，获取菜品推荐、订单管理和配送咨询等服务。
+The system features a **unified 8-tool Agent**, **multi-step plan execution**, **SSE streaming**, **multi-turn conversation memory**, **Cross-Encoder reranking**, **input/output guardrails**, **structured observability**, and **centralized configuration management**.
+
+**智能外卖助手** 是一个全栈外卖点餐系统，核心是基于 **LangGraph 状态机 Agent** 和**企业级 RAG 管线**的 AI 助手。系统具备**统一 8 工具体系**、**多步计划执行**、**SSE 流式输出**、**多轮对话记忆**、**Cross-Encoder 精排**、**输入/输出安全护栏**、**结构化可观测性**和**集中配置管理**等企业级能力。
 
 ---
 
@@ -28,10 +30,32 @@ AI-Powered Food Delivery Assistant
 - **User Auth** — Register, login, JWT-based token refresh / 注册登录，JWT 令牌刷新
 
 ### AI Assistant · AI 智能助手
-- **LangGraph Agent Runtime** — State-machine-based conversational agent / 基于状态机的对话智能体
-- **RAG Pipeline** — Multi-route recall, RRF fusion, weighted reranking, diversification / 多路召回、RRF 融合、加权重排序、结果多样化
+- **LangGraph Agent Runtime** — State-machine-based conversational agent with 8 unified tools / 基于状态机的对话智能体，统一 8 工具体系
+- **Multi-step Plan Execution** — RAG → Action serialized workflows (e.g., search then add to cart) / 多步计划执行（搜索后加购物车）
+- **LLM Query Rewriting** — Intelligent query expansion for better recall / LLM 查询改写，提升召回率
+- **SSE Streaming** — Token-by-token streaming responses via Server-Sent Events / SSE 流式逐 token 输出
+- **Multi-turn Conversation** — Thread-safe session history with LRU eviction / 多轮对话上下文管理，线程安全 LRU 淘汰
+- **Async Endpoint** — Non-blocking chat via `asyncio.to_thread()` / 异步聊天端点
+
+### RAG Pipeline · RAG 管线
+- **4-Route Recall** — Dense vector (Pinecone), Sparse (BM25), SQL catalog, Business rules / 4 路召回：向量、稀疏、SQL、业务规则
+- **RRF Fusion** — Reciprocal Rank Fusion to merge multi-route results / RRF 排序融合
+- **Cross-Encoder Reranking** — DashScope gte-rerank semantic relevance scoring / Cross-Encoder 精排
+- **Intent-based Weighted Reranking** — Dynamic weight profiles per query intent / 基于意图的动态加权重排序
+- **Diversification** — Merchant-level result diversity / 商家级结果多样化
+- **TieredCache** — Thread-safe LRU embedding cache replacing `@lru_cache` / 分层缓存替代 lru_cache
+
+### Safety & Observability · 安全与可观测性
+- **Input Guardrail** — Regex-based prompt injection detection / 输入护栏：正则注入检测
+- **Output Guardrail** — Price hallucination detection against evidence / 输出护栏：价格幻觉检测
+- **MetricsCollector** — Structured timers, counters, and metadata for agent & RAG nodes / 结构化指标采集
+- **RAG Evaluation Framework** — Golden set testing with keyword recall and absence check / RAG 离线评估框架
+- **Indexing Pipeline** — Catalog data → text → Pinecone upsert with namespace separation / 向量索引管线
+- **Centralized Config** — `AppConfig` dataclass with nested RAG, Agent, Guardrail configs / 集中配置管理
+
+### Grounding & Memory · 可信回答与记忆
 - **Grounding & Citations** — Evidence-backed answers with source attribution / 带引用的可信回答
-- **Undo Support** — Reversible actions (cart, address, preference changes) / 可撤销操作（购物车、地址、偏好变更）
+- **Undo Support** — Reversible actions (cart, address, preference changes) / 可撤销操作
 - **Long-term Memory** — Persistent user preference learning / 用户偏好长期记忆
 
 ---
@@ -39,40 +63,59 @@ AI-Powered Food Delivery Assistant
 ## 🏗️ Architecture · 架构概览
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    Frontend (Vue 3)                  │
-│         Element Plus · Axios · Vite                  │
-└──────────────────┬──────────────────────────────────┘
-                   │  HTTP / REST API
-┌──────────────────▼──────────────────────────────────┐
-│          Backend (FastAPI + Python 3.11+)            │
-│  ┌──────────────────────────────────────────────┐   │
-│  │         Assistant Service (LangGraph)         │   │
-│  │  LoadMemory → Plan → RAG/Action/Undo → Write │   │
-│  └──────────────────────────────────────────────┘   │
-│  ┌──────────┐ ┌───────────┐ ┌──────────────────┐   │
-│  │  Auth    │ │  Cart/    │ │  Address/Order   │   │
-│  │  Service │ │  Catalog  │ │  Service         │   │
-│  └──────────┘ └───────────┘ └──────────────────┘   │
-└──────────────────┬──────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                      Frontend (Vue 3)                           │
+│           Element Plus · Axios · Vite · SSE Client              │
+└──────────────────┬──────────────────────────────────────────────┘
+                   │  HTTP / REST / SSE
+┌──────────────────▼──────────────────────────────────────────────┐
+│            Backend (FastAPI + Python 3.11+)                      │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │         Assistant Service (LangGraph Agent)                │  │
+│  │  InputGuardrail → LoadMemory → Plan → RAG/Action/Undo     │  │
+│  │  → Evaluate → Respond (OutputGuardrail) → WriteMemory     │  │
+│  ├───────────────────────────────────────────────────────────┤  │
+│  │  ConversationStore │ StreamService │ MetricsCollector      │  │
+│  └───────────────────────────────────────────────────────────┘  │
+│  ┌──────────┐ ┌───────────┐ ┌──────────────┐ ┌─────────────┐  │
+│  │  Auth    │ │  Cart/    │ │  Address/    │ │  AppConfig  │  │
+│  │  Service │ │  Catalog  │ │  Order       │ │  (central)  │  │
+│  └──────────┘ └───────────┘ └──────────────┘ └─────────────┘  │
+└──────────────────┬──────────────────────────────────────────────┘
                    │
-┌──────────────────▼──────────────────────────────────┐
-│                  Data Layer                          │
-│  ┌──────────────┐  ┌────────────────────────────┐   │
-│  │   MySQL      │  │  Pinecone Vector Database  │   │
-│  │  (SQLAlchemy)│  │  (Semantic Search)         │   │
-│  └──────────────┘  └────────────────────────────┘   │
-└─────────────────────────────────────────────────────┘
+┌──────────────────▼──────────────────────────────────────────────┐
+│                       Data Layer                                │
+│  ┌──────────────┐  ┌─────────────────┐  ┌───────────────────┐  │
+│  │   MySQL      │  │  Pinecone       │  │  DashScope        │  │
+│  │  (SQLAlchemy)│  │  (Vector DB)    │  │  (Embedding/      │  │
+│  │             │  │                 │  │   Cross-Encoder)  │  │
+│  └──────────────┘  └─────────────────┘  └───────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Agent Runtime Flow
+### Agent Runtime Flow · Agent 运行流程
 
 ```
-User Message → LoadMemory → Plan → ┌── RAG (semantic + SQL + business recall)
-                                    ├── Action (cart/address/preference)
-                                    ├── Undo (revert last action)
-                                    └── Respond (grounded answer with citations)
-                                         → WriteMemory → Response
+User Message
+  │
+  ▼
+InputGuardrail ──(blocked)──► "请换一种方式提问"
+  │ (allowed)
+  ▼
+LoadMemory → Plan (8 tools) → ┌── RAG (4-route recall → RRF → Filter
+                               │        → CrossEncoder → WeightedRerank
+                               │        → Diversify)
+                               ├── Action (add_to_cart / remove_from_cart
+                               │          / save_address / upsert_preference
+                               │          / cart_clear)
+                               ├── Undo (revert last action)
+                               └── Evaluate (multi-step loop)
+                                      │
+                                      ▼
+                               Respond (OutputGuardrail)
+                                      │
+                                      ▼
+                               WriteMemory → SSE Stream / JSON Response
 ```
 
 ---
@@ -82,13 +125,15 @@ User Message → LoadMemory → Plan → ┌── RAG (semantic + SQL + busines
 | Layer | Technologies |
 |-------|-------------|
 | **Frontend** | Vue 3, Element Plus, Axios, Vite, Vitest |
-| **Backend** | Python 3.11+, FastAPI, Uvicorn |
-| **AI Runtime** | LangGraph, LangChain, LangChain-OpenAI |
-| **RAG** | Pinecone (Vector DB), DashScope Embeddings, Multi-Route Recall, RRF Fusion |
+| **Backend** | Python 3.11+, FastAPI, Uvicorn, sse-starlette |
+| **AI Runtime** | LangGraph (state machine), LangChain, LangChain-OpenAI |
+| **RAG** | Pinecone (Vector DB), DashScope Embeddings & Cross-Encoder (gte-rerank), BM25 Sparse Recall, RRF Fusion |
+| **Streaming** | SSE (Server-Sent Events) via sse-starlette |
 | **Database** | MySQL 8.0+, SQLAlchemy 2.0, Alembic |
 | **Auth** | JWT (python-jose), Passlib (pbkdf2_sha256) |
+| **Observability** | MetricsCollector (structured timers/counters), RAG Evaluation Framework |
 | **External APIs** | 高德地图 (AMap) for delivery distance, Tavily for web search |
-| **Testing** | Pytest, HTTPX, Vitest, Vue Test Utils |
+| **Testing** | Pytest, pytest-asyncio, HTTPX, Vitest, Vue Test Utils |
 
 ---
 
@@ -142,34 +187,58 @@ npm run dev
 
 ```
 smart_order/
-├── api/                        # FastAPI routes & schemas
-│   ├── routes/                 # Route handlers (auth, cart, orders, etc.)
-│   ├── models/                 # SQLAlchemy ORM models
-│   ├── main.py                 # FastAPI app entry
-│   ├── db.py                   # Database connection
-│   └── security.py             # JWT auth utilities
-├── service/                    # Business logic
-│   ├── agent_runtime/          # LangGraph agent (graph, nodes, planner, state)
-│   ├── rag/                    # RAG pipeline (recall, fusion, reranker, filters)
-│   ├── tools/                  # Tool implementations (cart, address, preference)
-│   ├── assistant_service.py    # Main assistant orchestrator
-│   └── ...                     # Cart, catalog, order, auth services
-├── agent/                      # Agent configuration
-├── tools/                      # CLI tools (seed data, eval, vector store ops)
-├── prompt/                     # System prompts for agent
-├── repository/                 # Data access layer
-├── database/                   # Migrations & seed data
-│   ├── migrations/             # Alembic migrations
-│   └── seeds/                  # Demo data
-├── tests/                      # Test suite
-│   ├── api/                    # API integration tests
-│   ├── service/                # Service unit & integration tests
-│   └── e2e/                    # End-to-end agent flow tests
-├── ui/                         # Vue 3 frontend
-│   ├── src/                    # Components, views, composables, API clients
+├── api/                            # FastAPI routes & schemas
+│   ├── routes/                     # Route handlers (auth, cart, orders, assistant)
+│   │   └── assistant.py            # Chat + SSE streaming endpoints
+│   ├── models/                     # SQLAlchemy ORM models
+│   ├── schemas.py                  # Pydantic request/response models
+│   ├── main.py                     # FastAPI app entry
+│   ├── db.py                       # Database connection
+│   └── security.py                 # JWT auth utilities
+├── service/                        # Business logic
+│   ├── agent_runtime/              # LangGraph agent
+│   │   ├── graph.py                # Agent graph definition (10 nodes)
+│   │   ├── nodes.py                # Node implementations + guardrails
+│   │   ├── planner.py              # Intent classification + tool dispatch
+│   │   └── state.py                # Agent state TypedDict + data models
+│   ├── rag/                        # RAG pipeline
+│   │   ├── recall.py               # 4-route recall (Dense, Sparse, SQL, Business)
+│   │   ├── fusion.py               # Reciprocal Rank Fusion
+│   │   ├── filters.py              # Hard filters
+│   │   ├── cross_encoder.py        # DashScope Cross-Encoder reranking
+│   │   ├── reranker.py             # Intent-based weighted reranking + embedding cache
+│   │   ├── diversifier.py          # Merchant-level diversity
+│   │   ├── query_planner.py        # Query planning + constraint extraction
+│   │   ├── query_rewriter.py       # LLM query rewriting
+│   │   └── models.py               # RAG data models (FusedCandidate, RagEvidence)
+│   ├── tools/                      # Tool implementations (cart, address, preference)
+│   ├── assistant_service.py        # Main assistant orchestrator (sync + async)
+│   ├── assistant_stream_service.py # SSE streaming service
+│   ├── conversation_store.py       # Thread-safe multi-turn session store (LRU)
+│   ├── cache.py                    # TieredCache (thread-safe LRU)
+│   ├── config.py                   # AppConfig (RAG, Agent, Guardrail configs)
+│   ├── guardrails.py               # Input/Output guardrails
+│   ├── observability.py            # MetricsCollector (timers, counters, metadata)
+│   └── ...                         # Cart, catalog, order, auth services
+├── tools/                          # CLI tools & evaluation
+│   ├── eval_golden_set.json        # RAG evaluation golden set (5 cases)
+│   ├── rag_evaluation.py           # RAG offline evaluation framework
+│   ├── indexing_pipeline.py        # Catalog → Pinecone indexing pipeline
+│   └── ...                         # Seed data, vector store ops
+├── prompt/                         # System prompts for agent
+│   └── agent/                      # Planner, answer, memory, query rewrite prompts
+├── repository/                     # Data access layer
+├── database/                       # Migrations & seed data
+├── tests/                          # Test suite (350+ tests)
+│   ├── api/                        # API integration tests + stream tests
+│   ├── service/                    # Service unit & integration tests
+│   │   └── rag/                    # RAG-specific tests (reranker, cross-encoder, etc.)
+│   └── ...                         # E2E agent flow tests
+├── ui/                             # Vue 3 frontend
+│   ├── src/                        # Components, views, composables, API clients
 │   └── package.json
-├── docs/                       # Design docs & plans
-├── CLAUDE.md                   # AI assistant instructions
+├── docs/                           # Design docs & plans
+├── CLAUDE.md                       # AI assistant instructions
 ├── requirements.txt
 └── pyproject.toml
 ```
@@ -179,13 +248,22 @@ smart_order/
 ## 🧪 Testing · 测试
 
 ```bash
-# Run all backend tests
-pytest
+# Run all backend tests (350+ tests)
+pytest tests/ -v
 
-# Run specific test file
-pytest tests/service/test_agent_planner.py -v
+# Run agent & RAG tests only
+pytest tests/service/ -v
 
-# Run RAG evaluation
+# Run specific test suites
+pytest tests/service/test_langgraph_agent_graph.py -v   # Agent graph integration
+pytest tests/service/test_multistep_plan.py -v          # Multi-step plan execution
+pytest tests/service/test_guardrails.py -v              # Input/Output guardrails
+pytest tests/service/rag/ -v                            # RAG pipeline tests
+
+# Run RAG offline evaluation (golden set)
+python tools/rag_evaluation.py
+
+# Run legacy RAG evaluator
 python tools/evaluate_assistant_rag.py
 
 # Frontend tests
@@ -216,13 +294,31 @@ Key environment variables (configured in `.env`):
 
 ## 📚 Key Dependencies · 核心依赖
 
-- **LangGraph** — Agent state machine / 智能体状态机
-- **LangChain** — LLM orchestration / LLM 编排框架
+- **LangGraph** — Agent state machine with multi-step execution / 智能体状态机，支持多步执行
+- **LangChain** — LLM orchestration & structured output / LLM 编排与结构化输出
 - **Pinecone** — Vector semantic search / 向量语义搜索
-- **FastAPI** — Web framework / Web 框架
+- **DashScope** — Text embeddings (text-embedding-v4) & Cross-Encoder reranking (gte-rerank) / 文本嵌入与精排
+- **sse-starlette** — Server-Sent Events for streaming / SSE 流式输出
+- **FastAPI** — Web framework with async support / 异步 Web 框架
 - **SQLAlchemy** — ORM / 数据库 ORM
 - **Vue 3** — Frontend framework / 前端框架
 - **Element Plus** — UI component library / UI 组件库
+
+---
+
+## 🔧 Configuration · 配置管理
+
+The system uses a centralized `AppConfig` dataclass (`service/config.py`) with nested configs:
+
+```python
+AppConfig
+├── RagConfig          # cache_max_size, cache_ttl, recall_limit,
+│                      # cross_encoder_top_k, intent_weights, bm25 params
+├── AgentConfig        # max_iterations, conversation limits
+└── GuardrailConfig    # max_input_length, enable_input/output_guardrail
+```
+
+Override defaults via `set_config()` for testing, or extend to load from environment variables for production.
 
 ---
 
