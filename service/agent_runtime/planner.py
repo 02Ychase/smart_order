@@ -36,7 +36,6 @@ class LangGraphAgentPlanner:
     def __init__(self, prompts: PromptRegistry | None = None) -> None:
         self.prompts = prompts or PromptRegistry()
         self._model_name = os.getenv("MODEL_NAME")
-        self._llm = None
         self._structured_llm = None
 
         if self._model_name:
@@ -67,18 +66,8 @@ class LangGraphAgentPlanner:
                     "Planner structured LLM call failed, falling back",
                     exc_info=True,
                 )
-            # Fall through to legacy path
 
-        # 2. Legacy path (external stub LLM for testing, backward compat)
-        if self._llm is not None:
-            try:
-                raw = self._llm.call(user_message, self.prompts.load("agent.planner"))
-                return self._apply_user_message_hints(self._parse(raw), user_message)
-            except Exception:
-                logger.warning("Planner LLM call failed, falling back to rule-based plan", exc_info=True)
-                return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
-
-        # 3. Direct call_llm_with_retry path (fallback when _structured_llm init failed but _model_name exists)
+        # 2. Direct call_llm_with_retry path (fallback when _structured_llm init failed but _model_name exists)
         if self._model_name:
             try:
                 raw = call_llm_with_retry(
@@ -90,10 +79,12 @@ class LangGraphAgentPlanner:
                 logger.warning("Planner LLM call failed, falling back to rule-based plan", exc_info=True)
                 return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
 
-        # 4. No LLM configured
+        # 3. No LLM configured
         logger.info("No LLM configured, using rule-based planner")
         return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
 
+    # 把 LLM 结构化输出的 AgentPlanSchema，转换成系统内部真正执行用的 
+    # AgentPlan，并在转换过程中做校正、规范化和兜底。
     def _schema_to_plan(self, schema: AgentPlanSchema) -> AgentPlan:
         """Convert a Pydantic AgentPlanSchema to the AgentPlan dataclass.
 

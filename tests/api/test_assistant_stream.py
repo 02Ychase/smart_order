@@ -14,6 +14,7 @@ async def test_stream_yields_chunks():
         chunks.append(chunk)
 
     assert len(chunks) > 0
+    assert any(chunk["type"] == "token" for chunk in chunks)
     assert chunks[-1]["type"] == "done"
 
 
@@ -34,6 +35,19 @@ async def test_stream_saves_conversation_history():
     assert history[0].content == "推荐一个菜"
 
     _conversation_store.clear(session_id)
+
+
+@pytest.mark.asyncio
+async def test_stream_emits_tokens_before_payload():
+    service = AssistantStreamService(session=None)
+
+    chunks = []
+    async for chunk in service.stream_chat_tokens("你好", session_id="stream-order-test", user_id=1):
+        chunks.append(chunk)
+
+    token_index = next(i for i, chunk in enumerate(chunks) if chunk["type"] == "token")
+    payload_index = next(i for i, chunk in enumerate(chunks) if chunk["type"] == "payload")
+    assert token_index < payload_index
 
 
 def test_stream_chunk_types():

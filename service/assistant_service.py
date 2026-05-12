@@ -42,8 +42,10 @@ class AssistantService:
 
     def _build_invoke_input(self, request: AssistantChatRequest, session_id: str) -> tuple[dict, dict]:
         new_message = HumanMessage(content=request.message)
+        # 根据session_id获取历史消息，并将新消息添加到历史消息中，构建agent的输入状态
         history = _conversation_store.get_history(session_id)
         messages = history + [new_message]
+        # 构建初始输入State
         state = {
             "messages": messages,
             "session_id": session_id,

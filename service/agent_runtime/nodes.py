@@ -42,6 +42,7 @@ def input_guardrail_node(state: dict) -> dict:
         return {"guardrail_blocked": False}
 
     guardrail = _get_input_guardrail()
+    # 取出最新的用户信息进行校验
     user_message = latest_user_message(state)
     result = guardrail.check(user_message)
 
@@ -54,6 +55,7 @@ def input_guardrail_node(state: dict) -> dict:
 
 def load_memory_node(state: dict, memory_service=None) -> dict:
     from service.observability import MetricsCollector
+    # 记录当前节点的一些运行信息，方便后面排查性能、错误、链路行为
     collector = MetricsCollector()
     collector.set_metadata("session_id", state.get("session_id"))
     collector.set_metadata("user_id", state.get("user_id"))
@@ -62,6 +64,7 @@ def load_memory_node(state: dict, memory_service=None) -> dict:
     if user_id is None or memory_service is None:
         return {"loaded_user_memories": [], "metrics": collector.to_log_dict()}
 
+    # 统计这一步的耗时
     with collector.timer("load_memory"):
         memories = memory_service.list_memories(user_id)
 

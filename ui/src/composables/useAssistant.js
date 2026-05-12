@@ -1,5 +1,5 @@
 import { ref } from 'vue'
-import { chatWithAssistant } from '../api/assistant'
+import { streamChatWithAssistant } from '../api/assistant'
 import { useAuth } from './useAuth'
 
 export function useAssistant() {
@@ -25,6 +25,32 @@ export function useAssistant() {
 
   const { currentUser } = useAuth()
 
+  const replaceMessageText = (index, text) => {
+    messages.value[index] = { ...messages.value[index], text }
+  }
+
+  const applyAssistantResponse = (payload, assistantMessageIndex) => {
+    sessionId.value = payload.session_id
+    lastResponseType.value = payload.response_type
+    replaceMessageText(assistantMessageIndex, payload.message)
+
+    const constraints = payload.extracted_constraints
+    if (constraints) {
+      extractedConstraints.value = [
+        ...(constraints.cuisine_types || []),
+        ...(constraints.party_size ? [`${constraints.party_size}人`] : []),
+        ...(constraints.budget_max ? [`${constraints.budget_max}元内`] : []),
+        ...(constraints.exclude_allergens || []),
+      ]
+    }
+    recommendations.value = payload.recommendations || []
+    comparisons.value = payload.comparisons || []
+    citations.value = payload.citations || []
+    suggestedActions.value = payload.suggested_actions || []
+    pendingAction.value = payload.pending_action || null
+    executedActions.value = payload.executed_actions || []
+  }
+
   const submit = async () => {
     const question = draft.value.trim()
     if (!question || loading.value) {
@@ -46,6 +72,8 @@ export function useAssistant() {
     pendingAction.value = null
     executedActions.value = []
 
+    let assistantMessageIndex = -1
+
     try {
       const payload = {
         message: question,
@@ -54,27 +82,30 @@ export function useAssistant() {
       if (currentUser.value?.id) {
         payload.user_id = currentUser.value.id
       }
-      const response = await chatWithAssistant(payload)
-      sessionId.value = response.session_id
-      lastResponseType.value = response.response_type
-      messages.value.push({ role: 'assistant', text: response.message })
+      messages.value.push({ role: 'assistant', text: '' })
+      assistantMessageIndex = messages.value.length - 1
 
-      const constraints = response.extracted_constraints
-      if (constraints) {
-        extractedConstraints.value = [
-          ...(constraints.cuisine_types || []),
-          ...(constraints.party_size ? [`${constraints.party_size}人`] : []),
-          ...(constraints.budget_max ? [`${constraints.budget_max}元内`] : []),
-          ...(constraints.exclude_allergens || []),
-        ]
+      let responseApplied = false
+      const response = await streamChatWithAssistant(payload, {
+        onToken: (token) => {
+          const currentText = messages.value[assistantMessageIndex]?.text || ''
+          replaceMessageText(assistantMessageIndex, currentText + token)
+        },
+        onPayload: (payload) => {
+          responseApplied = true
+          applyAssistantResponse(payload, assistantMessageIndex)
+        },
+      })
+
+      if (response && !responseApplied) {
+        applyAssistantResponse(response, assistantMessageIndex)
+      } else if (!response && !messages.value[assistantMessageIndex]?.text) {
+        replaceMessageText(assistantMessageIndex, '智能助手暂时没有返回内容，请稍后再试')
       }
-      recommendations.value = response.recommendations || []
-      comparisons.value = response.comparisons || []
-      citations.value = response.citations || []
-      suggestedActions.value = response.suggested_actions || []
-      pendingAction.value = response.pending_action || null
-      executedActions.value = response.executed_actions || []
     } catch (error) {
+      if (assistantMessageIndex >= 0 && !messages.value[assistantMessageIndex]?.text) {
+        messages.value.splice(assistantMessageIndex, 1)
+      }
       errorMessage.value = error?.message || '智能助手暂时不可用，请稍后再试'
     } finally {
       loading.value = false

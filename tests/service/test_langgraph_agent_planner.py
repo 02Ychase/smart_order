@@ -1,18 +1,6 @@
+from service.agent_runtime import planner as planner_module
 from service.agent_runtime.planner import LangGraphAgentPlanner
 from service.agent_runtime.schemas import AgentPlanSchema, FiltersSchema, GraphToolCallSchema
-
-
-class StubLLM:
-    def __init__(self, payload):
-        self.payload = payload
-
-    def call(self, query: str, system_instruction: str):
-        return self.payload
-
-
-class RaisingLLM:
-    def call(self, query: str, system_instruction: str):
-        raise RuntimeError("llm unavailable")
 
 
 class StubStructuredLLM:
@@ -34,15 +22,17 @@ class RaisingStructuredLLM:
 
 def test_planner_recommends_directly_without_budget_or_party_size() -> None:
     planner = LangGraphAgentPlanner()
-    planner._llm = StubLLM({
-        "intent": "recommendation",
-        "normalized_query": "辣的湘菜",
-        "requires_rag": True,
-        "filters": {"cuisine_types": ["湘菜"], "flavor_preferences": ["辣"]},
-        "tool_calls": [],
-        "should_answer_directly": True,
-        "response_hint": "推荐辣味湘菜",
-    })
+    planner._structured_llm = StubStructuredLLM(
+        AgentPlanSchema(
+            intent="recommendation",
+            normalized_query="辣的湘菜",
+            requires_rag=True,
+            filters=FiltersSchema(cuisine_types=["湘菜"], flavor_preferences=["辣"]),
+            tool_calls=[],
+            should_answer_directly=True,
+            response_hint="推荐辣味湘菜",
+        )
+    )
 
     plan = planner.plan("帮我推荐几个比较辣的湘菜", {"loaded_user_memories": []})
 
@@ -57,21 +47,23 @@ def test_planner_recommends_directly_without_budget_or_party_size() -> None:
 
 def test_planner_normalizes_hallucinated_dish_search_tool_to_recommendation_tool() -> None:
     planner = LangGraphAgentPlanner()
-    planner._llm = StubLLM({
-        "intent": "recommendation",
-        "normalized_query": "湘菜",
-        "requires_rag": True,
-        "filters": {},
-        "tool_calls": [
-            {
-                "tool_name": "search_dishes",
-                "arguments": {"query": "湘菜", "cuisine_types": ["湘菜"]},
-                "writes_database": False,
-            }
-        ],
-        "should_answer_directly": True,
-        "response_hint": "推荐湘菜",
-    })
+    planner._structured_llm = StubStructuredLLM(
+        AgentPlanSchema(
+            intent="recommendation",
+            normalized_query="湘菜",
+            requires_rag=True,
+            filters=FiltersSchema(),
+            tool_calls=[
+                GraphToolCallSchema(
+                    tool_name="search_dishes",
+                    arguments={"query": "湘菜", "cuisine_types": ["湘菜"]},
+                    writes_database=False,
+                )
+            ],
+            should_answer_directly=True,
+            response_hint="推荐湘菜",
+        )
+    )
 
     plan = planner.plan("推荐几个湘菜", {})
 
@@ -83,21 +75,23 @@ def test_planner_normalizes_hallucinated_dish_search_tool_to_recommendation_tool
 
 def test_planner_extracts_limit_and_price_sort_from_user_message() -> None:
     planner = LangGraphAgentPlanner()
-    planner._llm = StubLLM({
-        "intent": "recommendation",
-        "normalized_query": "最贵的湘菜",
-        "requires_rag": True,
-        "filters": {"cuisine_types": ["湘菜"]},
-        "tool_calls": [
-            {
-                "tool_name": "recommend_dishes",
-                "arguments": {"query": "最贵的湘菜", "cuisine_types": ["湘菜"]},
-                "writes_database": False,
-            }
-        ],
-        "should_answer_directly": True,
-        "response_hint": "推荐最贵的湘菜",
-    })
+    planner._structured_llm = StubStructuredLLM(
+        AgentPlanSchema(
+            intent="recommendation",
+            normalized_query="最贵的湘菜",
+            requires_rag=True,
+            filters=FiltersSchema(cuisine_types=["湘菜"]),
+            tool_calls=[
+                GraphToolCallSchema(
+                    tool_name="recommend_dishes",
+                    arguments={"query": "最贵的湘菜", "cuisine_types": ["湘菜"]},
+                    writes_database=False,
+                )
+            ],
+            should_answer_directly=True,
+            response_hint="推荐最贵的湘菜",
+        )
+    )
 
     plan = planner.plan("推荐一个最贵的湘菜", {})
 
@@ -108,21 +102,23 @@ def test_planner_extracts_limit_and_price_sort_from_user_message() -> None:
 
 def test_planner_normalizes_hallucinated_cafe_search_tool_to_catalog_tool() -> None:
     planner = LangGraphAgentPlanner()
-    planner._llm = StubLLM({
-        "intent": "knowledge",
-        "normalized_query": "卖咖啡的店铺",
-        "requires_rag": False,
-        "filters": {},
-        "tool_calls": [
-            {
-                "tool_name": "search_cafes",
-                "arguments": {"query": "卖咖啡的店铺", "required_keywords": ["咖啡"]},
-                "writes_database": False,
-            }
-        ],
-        "should_answer_directly": True,
-        "response_hint": "查询咖啡店",
-    })
+    planner._structured_llm = StubStructuredLLM(
+        AgentPlanSchema(
+            intent="knowledge",
+            normalized_query="卖咖啡的店铺",
+            requires_rag=False,
+            filters=FiltersSchema(),
+            tool_calls=[
+                GraphToolCallSchema(
+                    tool_name="search_cafes",
+                    arguments={"query": "卖咖啡的店铺", "required_keywords": ["咖啡"]},
+                    writes_database=False,
+                )
+            ],
+            should_answer_directly=True,
+            response_hint="查询咖啡店",
+        )
+    )
 
     plan = planner.plan("推荐几个卖咖啡的店铺", {})
 
@@ -134,7 +130,6 @@ def test_planner_normalizes_hallucinated_cafe_search_tool_to_catalog_tool() -> N
 
 def test_planner_rule_fallback_detects_undo() -> None:
     planner = LangGraphAgentPlanner()
-    planner._llm = None
     planner._model_name = None
 
     plan = planner.plan("帮我撤回刚才的删除", {"recent_action_ids": ["act_1"]})
@@ -145,7 +140,6 @@ def test_planner_rule_fallback_detects_undo() -> None:
 
 def test_planner_rule_fallback_routes_cart_clear_as_direct_write() -> None:
     planner = LangGraphAgentPlanner()
-    planner._llm = None
     planner._model_name = None
 
     plan = planner.plan("清空购物车", {"user_id": 9})
@@ -155,9 +149,15 @@ def test_planner_rule_fallback_routes_cart_clear_as_direct_write() -> None:
     assert plan.tool_calls[0].writes_database is True
 
 
-def test_planner_llm_failure_falls_back_to_rule_plan_for_cart_clear() -> None:
+def test_planner_llm_failure_falls_back_to_rule_plan_for_cart_clear(monkeypatch) -> None:
     planner = LangGraphAgentPlanner()
-    planner._llm = RaisingLLM()
+    planner._structured_llm = None
+    planner._model_name = "test-model"
+
+    def raise_llm_failure(**kwargs):
+        raise RuntimeError("llm unavailable")
+
+    monkeypatch.setattr(planner_module, "call_llm_with_retry", raise_llm_failure)
 
     plan = planner.plan("清空购物车", {"user_id": 9})
 
@@ -166,10 +166,13 @@ def test_planner_llm_failure_falls_back_to_rule_plan_for_cart_clear() -> None:
     assert plan.tool_calls[0].writes_database is True
 
 
-def test_planner_parses_common_false_strings_and_normalizes_read_tool_from_fenced_json() -> None:
+def test_planner_parses_common_false_strings_and_normalizes_read_tool_from_fenced_json(monkeypatch) -> None:
     planner = LangGraphAgentPlanner()
-    planner._llm = StubLLM(
-        """
+    planner._structured_llm = None
+    planner._model_name = "test-model"
+
+    def return_fenced_json(**kwargs):
+        return """
         ```json
         {
           "intent": "knowledge",
@@ -187,7 +190,8 @@ def test_planner_parses_common_false_strings_and_normalizes_read_tool_from_fence
         }
         ```
         """
-    )
+
+    monkeypatch.setattr(planner_module, "call_llm_with_retry", return_fenced_json)
 
     plan = planner.plan("营业时间", {})
 
@@ -197,10 +201,13 @@ def test_planner_parses_common_false_strings_and_normalizes_read_tool_from_fence
     assert plan.tool_calls[0].writes_database is False
 
 
-def test_planner_treats_null_tool_calls_as_empty_list() -> None:
+def test_planner_treats_null_tool_calls_as_empty_list(monkeypatch) -> None:
     planner = LangGraphAgentPlanner()
-    planner._llm = StubLLM(
-        {
+    planner._structured_llm = None
+    planner._model_name = "test-model"
+
+    def return_plan_with_null_tool_calls(**kwargs):
+        return {
             "intent": "greeting",
             "normalized_query": "你好",
             "requires_rag": False,
@@ -208,7 +215,8 @@ def test_planner_treats_null_tool_calls_as_empty_list() -> None:
             "should_answer_directly": True,
             "response_hint": "你好",
         }
-    )
+
+    monkeypatch.setattr(planner_module, "call_llm_with_retry", return_plan_with_null_tool_calls)
 
     plan = planner.plan("你好", {})
 
@@ -314,9 +322,8 @@ def test_planner_schema_to_plan_filters_have_defaults() -> None:
 
 
 def test_planner_structured_output_path_is_used_when_available() -> None:
-    """When _structured_llm is set, it takes priority over _llm and _model_name."""
+    """When _structured_llm is set, it is used before other fallback paths."""
     planner = LangGraphAgentPlanner()
-    planner._llm = StubLLM({"intent": "should_not_be_used"})
     planner._structured_llm = StubStructuredLLM(
         AgentPlanSchema(
             intent="greeting",
@@ -332,9 +339,9 @@ def test_planner_structured_output_path_is_used_when_available() -> None:
 
 
 def test_planner_structured_output_falls_back_to_rule_plan_on_failure() -> None:
-    """When structured output fails and _llm is None, fall back to rule plan."""
+    """When structured output fails and no model fallback exists, fall back to rule plan."""
     planner = LangGraphAgentPlanner()
-    planner._llm = None
+    planner._model_name = None
     planner._structured_llm = RaisingStructuredLLM()
 
     plan = planner.plan("清空购物车", {"user_id": 9})
@@ -343,17 +350,22 @@ def test_planner_structured_output_falls_back_to_rule_plan_on_failure() -> None:
     assert plan.tool_calls[0].tool_name == "cart_clear"
 
 
-def test_planner_structured_output_falls_back_to_legacy_llm_on_failure() -> None:
-    """When structured output fails but legacy _llm is set, fall back to _llm path."""
+def test_planner_structured_output_falls_back_to_direct_llm_on_failure(monkeypatch) -> None:
+    """When structured output fails but MODEL_NAME exists, fall back to direct LLM path."""
     planner = LangGraphAgentPlanner()
-    planner._llm = StubLLM({
-        "intent": "greeting",
-        "normalized_query": "你好",
-        "tool_calls": [],
-        "should_answer_directly": True,
-        "response_hint": "你好",
-    })
+    planner._model_name = "test-model"
     planner._structured_llm = RaisingStructuredLLM()
+
+    def return_plan_json(**kwargs):
+        return {
+            "intent": "greeting",
+            "normalized_query": "你好",
+            "tool_calls": [],
+            "should_answer_directly": True,
+            "response_hint": "你好",
+        }
+
+    monkeypatch.setattr(planner_module, "call_llm_with_retry", return_plan_json)
 
     plan = planner.plan("你好", {})
 

@@ -51,31 +51,38 @@ AgentIntentSchema = Literal[
 class AgentPlanSchema(BaseModel):
     """Schema for the full agent plan output by the LLM planner."""
 
+    # 用户意图
     intent: str = Field(
         default="unsupported",
         description="Intent category: greeting, recommendation, knowledge, cart_action, address_action, preference_action, undo_action, unsupported",
     )
+    # 把用户原话整理成更适合检索的短查询
     normalized_query: str = Field(
         default="",
         description="A concise query suitable for retrieval, distilled from the user message",
     )
+    # 告诉 Agent 是否需要进入 RAG 检索
     requires_rag: bool = Field(
         default=False,
         description="Whether this plan requires RAG retrieval to answer",
     )
+    # 保存从用户自然语言中抽取出的结构化约束，口味偏好，预算上限等
     filters: FiltersSchema = Field(
         default_factory=FiltersSchema,
         description="Search constraints and filter parameters",
     )
+    # 告诉 Agent 后面要按顺序执行哪些工具
     tool_calls: list[GraphToolCallSchema] = Field(
         default_factory=list,
         description="Ordered list of tool calls to execute SEQUENTIALLY. Each call is a step. "
                     "For multi-step tasks (e.g., search then add_to_cart), list them in execution order.",
     )
+    # 表示是否应该直接回答，而不是追问澄清
     should_answer_directly: bool = Field(
         default=True,
         description="Whether the agent should answer directly without asking clarifying questions",
     )
+    # 给 respond 节点的提示信息。
     response_hint: str = Field(
         default="",
         description="A brief hint for the response generation node",

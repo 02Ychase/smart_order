@@ -1,19 +1,19 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, test, vi } from 'vitest'
 
-const { chatWithAssistant } = vi.hoisted(() => ({
-  chatWithAssistant: vi.fn(),
+const { streamChatWithAssistant } = vi.hoisted(() => ({
+  streamChatWithAssistant: vi.fn(),
 }))
 
 vi.mock('../api/assistant', () => ({
-  chatWithAssistant,
+  streamChatWithAssistant,
 }))
 
 import FloatingAssistant from '../components/home/FloatingAssistant.vue'
 
 describe('FloatingAssistant', () => {
   test('submits a user message and renders the clarification question', async () => {
-    chatWithAssistant.mockResolvedValueOnce({
+    streamChatWithAssistant.mockResolvedValueOnce({
       session_id: 'session-1',
       message: '请告诉我这顿大概几个人吃、预算多少？',
       needs_clarification: true,
@@ -54,16 +54,22 @@ describe('FloatingAssistant', () => {
     await wrapper.find('button').trigger('click')
     await flushPromises()
 
-    expect(chatWithAssistant).toHaveBeenCalledWith({
-      message: '推荐几种川菜',
-      session_id: null,
-    })
+    expect(streamChatWithAssistant).toHaveBeenCalledWith(
+      {
+        message: '推荐几种川菜',
+        session_id: null,
+      },
+      expect.objectContaining({
+        onToken: expect.any(Function),
+        onPayload: expect.any(Function),
+      }),
+    )
     expect(wrapper.text()).toContain('请告诉我这顿大概几个人吃、预算多少？')
     expect(wrapper.text()).toContain('川菜')
   })
 
   test('renders recommendation cards and citations from the assistant response', async () => {
-    chatWithAssistant.mockResolvedValueOnce({
+    streamChatWithAssistant.mockResolvedValueOnce({
       session_id: 'session-1',
       message: '结合商家数据、菜品价格和匹配理由，我推荐：\n1. 鱼香肉丝（兰姨小炒，28元）：匹配川菜偏好',
       needs_clarification: false,
@@ -129,7 +135,7 @@ describe('FloatingAssistant', () => {
   })
 
   test('renders pending action confirmation', async () => {
-    chatWithAssistant.mockResolvedValueOnce({
+    streamChatWithAssistant.mockResolvedValueOnce({
       session_id: 's1',
       message: '是否加入购物车？',
       response_type: 'confirmation_required',

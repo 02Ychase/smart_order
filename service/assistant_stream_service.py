@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 from typing import AsyncIterator
 
@@ -24,6 +25,7 @@ class AssistantStreamService:
                 retriever=AdvancedRagRetriever(graph_session),
                 action_executor=LocalActionExecutor(self.session),
                 memory_service=UserMemoryService(self.session) if graph_session else None,
+                use_llm_response=False,
             )
 
     async def stream_chat_tokens(
@@ -51,21 +53,82 @@ class AssistantStreamService:
         config = {"configurable": {"thread_id": session_id}}
         response_message = ""
 
-        async for event in self._graph.astream_events(initial_state, config=config, version="v2"):
-            kind = event.get("event", "")
-            if kind == "on_chat_model_stream":
-                content = event.get("data", {}).get("chunk", {})
-                if hasattr(content, "content") and content.content:
-                    yield {"type": "token", "content": content.content}
-            elif kind == "on_chain_end" and event.get("name") == "respond":
-                output = event.get("data", {}).get("output", {})
-                payload = output.get("response_payload")
-                if payload:
-                    response_message = payload.get("message", "")
-                    yield {"type": "payload", "data": payload}
+        result = await asyncio.to_thread(self._graph.invoke, initial_state, config)
+        payload = dict(result.get("response_payload") or {})
+        response_message = payload.get("message", "")
+
+        if result.get("recent_evidence"):
+            streamed_message = ""
+            async for token in self._stream_grounded_response(
+                user_message=message,
+                response_type=payload.get("response_type", "recommendation"),
+                evidence=result.get("recent_evidence") or [],
+            ):
+                streamed_message += token
+                yield {"type": "token", "content": token}
+
+            if streamed_message:
+                response_message = streamed_message
+                payload["message"] = streamed_message
+        else:
+            async for token in self._stream_text(response_message):
+                yield {"type": "token", "content": token}
+
+        if payload:
+            yield {"type": "payload", "data": payload}
 
         _conversation_store.append(session_id, new_message)
         if response_message:
             _conversation_store.append(session_id, AIMessage(content=response_message))
 
         yield {"type": "done"}
+
+    async def _stream_grounded_response(
+        self,
+        *,
+        user_message: str,
+        response_type: str,
+        evidence: list[dict],
+    ) -> AsyncIterator[str]:
+        try:
+            from langchain.chat_models import init_chat_model
+            from langchain_core.prompts import ChatPromptTemplate
+
+            from service.agent_runtime.nodes import _build_structured_data, _format_evidence_for_llm, _template_recommendation
+            from service.agent_runtime.prompts import PromptRegistry
+            from service.config import get_config
+            import os
+
+            if get_config().guardrails.enable_output_guardrail:
+                recommendations, _ = _build_structured_data(evidence)
+                async for token in self._stream_text(_template_recommendation(recommendations)):
+                    yield token
+                return
+
+            model_name = os.getenv("MODEL_NAME")
+            if not model_name:
+                raise ValueError("MODEL_NAME not configured")
+
+            evidence_text = _format_evidence_for_llm(evidence)
+            system_prompt = PromptRegistry().load("agent.answer_grounded")
+            prompt = f"用户消息：{user_message}\n意图：{response_type}\n\n检索到的证据：\n{evidence_text}\n\n请基于证据生成自然回复。"
+            chain = ChatPromptTemplate.from_messages([
+                ("system", "{system_instruction}"),
+                ("human", "{query}"),
+            ]) | init_chat_model(model=model_name, model_provider="openai")
+
+            async for chunk in chain.astream({"system_instruction": system_prompt, "query": prompt}):
+                content = getattr(chunk, "content", "")
+                if content:
+                    yield content
+        except Exception:
+            from service.agent_runtime.nodes import _build_structured_data, _template_recommendation
+
+            recommendations, _ = _build_structured_data(evidence)
+            async for token in self._stream_text(_template_recommendation(recommendations)):
+                yield token
+
+    async def _stream_text(self, text: str) -> AsyncIterator[str]:
+        for char in text or "":
+            yield char
+            await asyncio.sleep(0.02)
