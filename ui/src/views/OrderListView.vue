@@ -31,7 +31,22 @@
         </div>
         <div class="order-card-footer">
           <span class="order-time">{{ formatTime(order.created_at) }}</span>
-          <span class="order-amount">{{ formatCurrency(order.payable_amount) }}</span>
+          <div class="footer-right">
+            <span class="order-amount">{{ formatCurrency(order.payable_amount) }}</span>
+            <el-popconfirm
+              v-if="['pending_payment', 'paid'].includes(order.order_status)"
+              title="确定要取消该订单吗？"
+              confirm-button-text="取消订单"
+              cancel-button-text="暂不"
+              @confirm.stop="cancelOrderFromList(order.checkout_order_id)"
+            >
+              <template #reference>
+                <el-button size="small" :loading="cancellingId === order.checkout_order_id" @click.stop>
+                  取消
+                </el-button>
+              </template>
+            </el-popconfirm>
+          </div>
         </div>
       </div>
     </template>
@@ -40,7 +55,7 @@
 
 <script setup>
 import { onMounted, ref } from 'vue'
-import { listOrders } from '../api/orders'
+import { cancelOrder, listOrders } from '../api/orders'
 import { formatCurrency } from '../utils/currency'
 import { formatOrderStatus } from '../utils/orderStatus'
 
@@ -62,11 +77,25 @@ const statusTagType = (status) => {
   return map[status] || 'info'
 }
 
+const cancellingId = ref(null)
+
 const formatTime = (isoString) => {
   if (!isoString) return ''
   const d = new Date(isoString)
   const pad = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+const cancelOrderFromList = async (orderId) => {
+  cancellingId.value = orderId
+  try {
+    await cancelOrder(orderId)
+    orders.value = await listOrders()
+  } catch (error) {
+    errorMessage.value = error?.message || '取消失败，请稍后再试'
+  } finally {
+    cancellingId.value = null
+  }
 }
 
 onMounted(async () => {
@@ -152,6 +181,12 @@ onMounted(async () => {
 .order-amount {
   font-weight: 600;
   color: #1f2a44;
+}
+
+.footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .error-text {

@@ -91,3 +91,13 @@ class AuthService:
         if user is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
         return self._serialize_user(user)
+
+    def update_profile(self, user_id: int, full_name: str, phone: str) -> CurrentUserResponse:
+        user = self.users.get_by_id(user_id)
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+        user.full_name = full_name
+        user.phone = phone
+        self.users.session.commit()
+        self.users.session.refresh(user)
+        return self._serialize_user(user)

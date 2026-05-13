@@ -2,8 +2,17 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from api.models.cart import CartItem
-from api.models.order import CheckoutOrder, DeliveryQuote, MerchantOrder, OrderItem, PaymentRecord
+from api.models.order import CheckoutOrder, DeliveryQuote, MerchantOrder, OrderItem, OrderReview, PaymentRecord
 from api.models.user import UserAddress
+
+
+VALID_STATUS_TRANSITIONS: dict[str, str] = {
+    "paid": "preparing",
+    "preparing": "delivering",
+    "delivering": "completed",
+}
+
+CANCELLABLE_STATUSES = {"pending_payment", "paid"}
 
 
 class OrderRepository:
@@ -150,3 +159,53 @@ class OrderRepository:
         self.session.commit()
         self.session.refresh(checkout_order)
         return checkout_order
+
+    def advance_order_status(self, checkout_order_id: int) -> CheckoutOrder | None:
+        checkout_order = self.get_checkout_order(checkout_order_id)
+        if checkout_order is None:
+            return None
+
+        next_status = VALID_STATUS_TRANSITIONS.get(checkout_order.order_status)
+        if next_status is None:
+            return None
+
+        checkout_order.order_status = next_status
+        for merchant_order in self.list_merchant_orders(checkout_order_id):
+            merchant_order.order_status = next_status
+
+        self.session.commit()
+        self.session.refresh(checkout_order)
+        return checkout_order
+
+    def cancel_order(self, checkout_order_id: int) -> CheckoutOrder | None:
+        checkout_order = self.get_checkout_order(checkout_order_id)
+        if checkout_order is None:
+            return None
+
+        if checkout_order.order_status not in CANCELLABLE_STATUSES:
+            return None
+
+        checkout_order.order_status = "cancelled"
+        checkout_order.payment_status = "cancelled"
+        for merchant_order in self.list_merchant_orders(checkout_order_id):
+            merchant_order.order_status = "cancelled"
+
+        self.session.commit()
+        self.session.refresh(checkout_order)
+        return checkout_order
+
+    def get_review(self, checkout_order_id: int) -> OrderReview | None:
+        statement = select(OrderReview).where(OrderReview.checkout_order_id == checkout_order_id)
+        return self.session.scalar(statement)
+
+    def create_review(self, checkout_order_id: int, user_id: int, rating: int, comment: str) -> OrderReview:
+        review = OrderReview(
+            checkout_order_id=checkout_order_id,
+            user_id=user_id,
+            rating=rating,
+            comment=comment,
+        )
+        self.session.add(review)
+        self.session.commit()
+        self.session.refresh(review)
+        return review

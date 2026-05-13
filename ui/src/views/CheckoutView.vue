@@ -101,6 +101,13 @@
 
       <div v-for="mo in previewData.merchant_orders" :key="mo.merchant_id" class="preview-merchant">
         <h4>{{ mo.merchant_name }}</h4>
+        <el-alert
+          v-if="mo.goods_amount < mo.min_order_amount"
+          :title="`起送金额 ${formatCurrency(mo.min_order_amount)}，还差 ${formatCurrency(mo.min_order_amount - mo.goods_amount)}`"
+          type="warning"
+          show-icon
+          :closable="false"
+        />
         <div v-for="item in mo.items" :key="item.dish_id" class="preview-item">
           <span>{{ item.dish_name }}</span>
           <span>× {{ item.quantity }}</span>
@@ -124,7 +131,7 @@
 
       <footer class="cart-footer">
         <el-button @click="step = 'select_address'">返回</el-button>
-        <el-button type="primary" :loading="payLoading" @click="confirmAndPay">
+        <el-button type="primary" :disabled="hasMinOrderViolation" :loading="payLoading" @click="confirmAndPay">
           确认并支付 {{ formatCurrency(previewData.payable_amount) }}
         </el-button>
       </footer>
@@ -156,7 +163,7 @@
 
 <script setup>
 import { Loading } from '@element-plus/icons-vue'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { listAddresses } from '../api/address'
 import { updateCartItem } from '../api/cart'
 import { mockPay, previewCheckout, submitOrder } from '../api/orders'
@@ -182,6 +189,13 @@ const previewLoading = ref(false)
 
 const orderResult = ref(null)
 const payLoading = ref(false)
+
+const hasMinOrderViolation = computed(() => {
+  if (!previewData.value) return false
+  return previewData.value.merchant_orders.some(
+    (mo) => mo.goods_amount < mo.min_order_amount
+  )
+})
 
 const loadCart = async () => {
   try {

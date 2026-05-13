@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from repository.cart_repository import CartRepository
 from repository.order_repository import OrderRepository
+from service.order_events import publish
 
 
 class OrderService:
@@ -178,6 +179,7 @@ class OrderService:
                 {
                     "merchant_id": merchant_order["merchant_id"],
                     "merchant_name": merchant_order["merchant_name"],
+                    "min_order_amount": float(merchant_order["min_order_amount"]),
                     "items": [
                         {
                             "dish_id": item["dish_id"],
@@ -246,3 +248,100 @@ class OrderService:
         if checkout_order is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="order not found")
         return self._serialize_order(checkout_order, include_items=True)
+
+    def advance_order_status(self, user_id: int, checkout_order_id: int) -> dict:
+        checkout_order = self.orders.get_checkout_order_for_user(user_id, checkout_order_id)
+        if checkout_order is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="order not found")
+
+        result = self.orders.advance_order_status(checkout_order_id)
+        if result is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="cannot advance order status")
+
+        serialized = self._serialize_order(result, include_items=True)
+        publish(checkout_order_id, "status_changed", serialized)
+        return serialized
+
+    def cancel_order(self, user_id: int, checkout_order_id: int) -> dict:
+        checkout_order = self.orders.get_checkout_order_for_user(user_id, checkout_order_id)
+        if checkout_order is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="order not found")
+
+        result = self.orders.cancel_order(checkout_order_id)
+        if result is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="order cannot be cancelled")
+
+        serialized = self._serialize_order(result, include_items=True)
+        publish(checkout_order_id, "status_changed", serialized)
+        return serialized
+
+    def submit_review(self, user_id: int, checkout_order_id: int, payload) -> dict:
+        checkout_order = self.orders.get_checkout_order_for_user(user_id, checkout_order_id)
+        if checkout_order is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="order not found")
+        if checkout_order.order_status != "completed":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="only completed orders can be reviewed")
+
+        existing = self.orders.get_review(checkout_order_id)
+        if existing is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="order already reviewed")
+
+        review = self.orders.create_review(
+            checkout_order_id=checkout_order_id,
+            user_id=user_id,
+            rating=payload.rating,
+            comment=payload.comment,
+        )
+        return {
+            "id": review.id,
+            "checkout_order_id": review.checkout_order_id,
+            "rating": review.rating,
+            "comment": review.comment,
+            "created_at": review.created_at.isoformat(),
+        }
+
+    def get_review(self, user_id: int, checkout_order_id: int) -> dict | None:
+        checkout_order = self.orders.get_checkout_order_for_user(user_id, checkout_order_id)
+        if checkout_order is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="order not found")
+
+        review = self.orders.get_review(checkout_order_id)
+        if review is None:
+            return None
+
+        return {
+            "id": review.id,
+            "checkout_order_id": review.checkout_order_id,
+            "rating": review.rating,
+            "comment": review.comment,
+            "created_at": review.created_at.isoformat(),
+        }
+
+    def reorder(self, user_id: int, checkout_order_id: int) -> dict:
+        checkout_order = self.orders.get_checkout_order_for_user(user_id, checkout_order_id)
+        if checkout_order is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="order not found")
+
+        added_items: list[dict] = []
+        skipped_items: list[dict] = []
+
+        for merchant_order in self.orders.list_merchant_orders(checkout_order_id):
+            for item in self.orders.list_order_items(merchant_order.id):
+                dish = self.carts.get_dish(item.dish_id)
+                if dish is None or not dish.is_available:
+                    skipped_items.append({"dish_id": item.dish_id, "dish_name": item.dish_name_snapshot, "quantity": item.quantity})
+                    continue
+
+                merchant = self.carts.get_merchant(dish.merchant_id)
+                if merchant is None or not merchant.is_open:
+                    skipped_items.append({"dish_id": item.dish_id, "dish_name": item.dish_name_snapshot, "quantity": item.quantity})
+                    continue
+
+                cart_item = self.carts.upsert_item(user_id, item.dish_id, item.quantity)
+                added_items.append({
+                    "dish_id": cart_item.dish_id,
+                    "dish_name": item.dish_name_snapshot,
+                    "quantity": cart_item.quantity,
+                })
+
+        return {"added_items": added_items, "skipped_items": skipped_items}

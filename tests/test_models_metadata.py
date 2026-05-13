@@ -16,6 +16,9 @@ EXPECTED_TABLES = {
     "delivery_quotes",
     "action_journal",
     "user_memories",
+    "order_reviews",
+    "favorites",
+    "coupons",
 }
 
 

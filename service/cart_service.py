@@ -39,10 +39,16 @@ class CartService:
         return {"items": list(grouped.values()), "goods_amount": goods_amount}
 
     def add_item(self, user_id: int, payload) -> dict:
+        error_map = {
+            "dish not found": "菜品不存在",
+            "dish unavailable": "菜品已下架",
+            "merchant closed": "商家已休息",
+        }
         try:
             item = self.carts.upsert_item(user_id, payload.dish_id, payload.quantity)
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="dish not found") from exc
+            detail = error_map.get(str(exc), str(exc))
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
         return {"success": True, "dish_id": item.dish_id, "quantity": item.quantity}
 
     def update_item(self, user_id: int, dish_id: int, quantity: int) -> dict:

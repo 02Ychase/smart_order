@@ -57,6 +57,14 @@ class CatalogService:
             return None
         return _serialize_merchant(merchant)
 
+    def search(self, keyword: str, limit: int = 20) -> dict:
+        merchants = self.catalog.search_merchants(keyword, limit=limit)
+        dishes = self.catalog.search_dishes(keyword, limit=limit)
+        return {
+            "merchants": [_serialize_merchant(m) for m in merchants],
+            "dishes": [_serialize_dish(d) for d in dishes],
+        }
+
 
 def _serialize_merchant(merchant) -> dict:
     return {

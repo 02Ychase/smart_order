@@ -5,9 +5,12 @@ build/
 dist/
 wheels/
 *.egg-info
+.eggs/
 
 # Virtual environments
 .venv
+venv/
+ENV/
 
 # Environment and local config
 .env
@@ -29,13 +32,24 @@ ui/dist/
 
 # Database files
 *.db
+*.sqlite3
+
+# Pytest & coverage
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
 
 # OS/editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
+# Misc
 CLAUDE.md
 opencode.json
 notes/

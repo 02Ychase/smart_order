@@ -103,3 +103,31 @@ class CatalogRepository:
 
     def get_merchant(self, merchant_id: int) -> Merchant | None:
         return self.session.get(Merchant, merchant_id)
+
+    def search_merchants(self, keyword: str, limit: int = 20) -> list[Merchant]:
+        pattern = f"%{keyword}%"
+        statement = (
+            select(Merchant)
+            .where(
+                Merchant.is_open.is_(True),
+                Merchant.name.ilike(pattern) | Merchant.description.ilike(pattern),
+            )
+            .order_by(Merchant.rating.desc(), Merchant.id.asc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(statement))
+
+    def search_dishes(self, keyword: str, limit: int = 20) -> list[Dish]:
+        pattern = f"%{keyword}%"
+        statement = (
+            select(Dish)
+            .join(Merchant)
+            .where(
+                Dish.is_available.is_(True),
+                Merchant.is_open.is_(True),
+                Dish.name.ilike(pattern) | Dish.description.ilike(pattern) | Dish.tags.ilike(pattern),
+            )
+            .order_by(Dish.is_recommended.desc(), Dish.id.asc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(statement))

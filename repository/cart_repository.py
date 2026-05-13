@@ -47,6 +47,13 @@ class CartRepository:
         if dish is None:
             raise ValueError("dish not found")
 
+        if not dish.is_available:
+            raise ValueError("dish unavailable")
+
+        merchant = self.get_merchant(dish.merchant_id)
+        if merchant is None or not merchant.is_open:
+            raise ValueError("merchant closed")
+
         if item is None:
             item = CartItem(
                 cart_id=cart.id,

@@ -13,6 +13,8 @@
       </el-badge>
       <el-button plain @click="$emit('open-address')">地址管理</el-button>
       <el-button plain @click="$emit('open-orders')">我的订单</el-button>
+      <el-button plain @click="$emit('open-favorites')">收藏</el-button>
+      <el-button plain @click="$emit('open-profile')">我的</el-button>
     </div>
   </section>
 </template>
@@ -29,7 +31,7 @@ defineProps({
   },
 })
 
-defineEmits(['open-login', 'open-cart', 'open-address', 'open-orders'])
+defineEmits(['open-login', 'open-cart', 'open-address', 'open-orders', 'open-profile', 'open-favorites'])
 </script>
 
 <style scoped>

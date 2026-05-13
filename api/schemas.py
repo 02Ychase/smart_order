@@ -44,6 +44,11 @@ class AddressRequest(BaseModel):
     is_default: bool = Field(default=False)
 
 
+class UpdateProfileRequest(BaseModel):
+    full_name: str = ""
+    phone: str = ""
+
+
 class AddressResponse(AddressRequest):
     id: int
 
@@ -127,6 +132,7 @@ class CheckoutPreviewMerchantOrderResponse(BaseModel):
     goods_amount: float
     delivery_amount: float
     payable_amount: float
+    min_order_amount: float
     delivery_quote: DeliveryQuoteResponse
 
 
@@ -260,3 +266,58 @@ class AssistantHealthResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     service: str
+
+
+class SearchResponse(BaseModel):
+    merchants: list[MerchantSummaryResponse]
+    dishes: list[DishResponse]
+
+
+class OrderReviewRequest(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: str = ""
+
+
+class OrderReviewResponse(BaseModel):
+    id: int
+    checkout_order_id: int
+    rating: int
+    comment: str
+    created_at: str
+
+
+class ReorderItemResponse(BaseModel):
+    dish_id: int
+    dish_name: str
+    quantity: int
+
+
+class ReorderResponse(BaseModel):
+    added_items: list[ReorderItemResponse]
+    skipped_items: list[ReorderItemResponse]
+
+
+class FavoriteResponse(BaseModel):
+    id: int
+    merchant_id: int
+    merchant_name: str
+    created_at: str
+
+
+class FavoriteToggleResponse(BaseModel):
+    favorited: bool
+    merchant_id: int
+
+
+class CouponResponse(BaseModel):
+    id: int
+    code: str
+    discount_amount: float
+    min_order_amount: float
+    status: str
+    expires_at: str | None
+    created_at: str
+
+
+class ClaimCouponRequest(BaseModel):
+    code: str

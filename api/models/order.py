@@ -66,3 +66,14 @@ class DeliveryQuote(Base):
     estimated_minutes: Mapped[int] = mapped_column(Integer, default=0)
     delivery_fee: Mapped[Decimal] = mapped_column(Numeric(10, 2), default=0)
     message: Mapped[str] = mapped_column(Text, default="")
+
+
+class OrderReview(Base):
+    __tablename__ = "order_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    checkout_order_id: Mapped[int] = mapped_column(ForeignKey("checkout_orders.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    rating: Mapped[int] = mapped_column(Integer)
+    comment: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

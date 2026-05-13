@@ -24,10 +24,23 @@ The system features a **unified 8-tool Agent**, **multi-step plan execution**, *
 
 ### Core Business · 核心业务
 - **Merchant & Dish Catalog** — Browse dishes by category, cuisine type, price range / 按分类、菜系、价格浏览菜品
+- **Frontend Search** — Search merchants and dishes by keyword / 按关键词搜索商家和菜品
 - **Shopping Cart** — Add, update, remove cart items with persistent state / 购物车增删改查，状态持久化
+- **Cart Availability Validation** — Block unavailable dishes and closed merchants / 加购时校验菜品可用性与商家营业状态
+- **Checkout & Payment** — Multi-step checkout: cart → address → preview → pay / 多步结算：购物车 → 地址 → 预览 → 支付
 - **Order Management** — Place orders, view order history and details / 下单、查看订单历史和详情
+- **Order Status Advancement** — Push orders through paid → preparing → delivering → completed / 订单状态推进：已支付 → 制作中 → 配送中 → 已完成
+- **Cancel Orders** — Cancel orders in pending_payment or paid status / 取消待支付或已支付的订单
+- **Order Reviews** — Rate and comment on completed orders / 对已完成订单进行评分和评价
+- **Reorder** — One-click reorder from order history / 从历史订单一键再来一单
+- **Min Order Amount Warning** — Preview checkout shows min order violations per merchant / 结算预览展示各商家起送金额不足警告
 - **Address Management** — Save and manage delivery addresses / 管理收货地址
 - **User Auth** — Register, login, JWT-based token refresh / 注册登录，JWT 令牌刷新
+- **User Profile** — Edit full name and phone number / 编辑姓名和手机号
+- **Favorites** — Save and manage favorite merchants / 收藏与管理收藏商家
+- **Coupons** — Claim and view coupons / 领取和查看优惠券
+- **Business Hours** — Display merchant operating status / 展示商家营业时间和状态
+- **SSE Real-time Push** — Live order status updates via Server-Sent Events / 通过 SSE 实时推送订单状态变更
 
 ### AI Assistant · AI 智能助手
 - **LangGraph Agent Runtime** — State-machine-based conversational agent with 8 unified tools / 基于状态机的对话智能体，统一 8 工具体系
@@ -188,10 +201,24 @@ npm run dev
 ```
 smart_order/
 ├── api/                            # FastAPI routes & schemas
-│   ├── routes/                     # Route handlers (auth, cart, orders, assistant)
+│   ├── routes/                     # Route handlers
+│   │   ├── auth.py                 # Register, login, refresh, profile
+│   │   ├── catalog.py              # Merchants, dishes, search
+│   │   ├── cart.py                 # Cart CRUD
+│   │   ├── orders.py               # Orders, advance, cancel, review, reorder, SSE events
+│   │   ├── favorites.py            # Favorite merchants
+│   │   ├── coupons.py              # Coupon claim & list
+│   │   ├── address.py              # Address CRUD
 │   │   └── assistant.py            # Chat + SSE streaming endpoints
 │   ├── models/                     # SQLAlchemy ORM models
+│   │   ├── user.py                 # User, UserAddress
+│   │   ├── catalog.py              # Merchant, DishCategory, Dish
+│   │   ├── cart.py                 # Cart, CartItem
+│   │   ├── order.py                # CheckoutOrder, MerchantOrder, OrderItem, OrderReview, ...
+│   │   ├── favorite.py             # Favorite
+│   │   └── coupon.py               # Coupon
 │   ├── schemas.py                  # Pydantic request/response models
+│   ├── deps.py                     # Dependencies (auth, token query param)
 │   ├── main.py                     # FastAPI app entry
 │   ├── db.py                       # Database connection
 │   └── security.py                 # JWT auth utilities
@@ -212,14 +239,27 @@ smart_order/
 │   │   ├── query_rewriter.py       # LLM query rewriting
 │   │   └── models.py               # RAG data models (FusedCandidate, RagEvidence)
 │   ├── tools/                      # Tool implementations (cart, address, preference)
+│   ├── order_service.py            # Order lifecycle (checkout, advance, cancel, review, reorder)
+│   ├── order_events.py             # SSE pub/sub for real-time order updates
+│   ├── cart_service.py             # Cart operations with availability validation
+│   ├── catalog_service.py          # Catalog listing & search
+│   ├── favorite_service.py         # Favorite toggle & list
+│   ├── coupon_service.py           # Coupon claim & list
+│   ├── auth_service.py             # Auth & user profile
 │   ├── assistant_service.py        # Main assistant orchestrator (sync + async)
 │   ├── assistant_stream_service.py # SSE streaming service
 │   ├── conversation_store.py       # Thread-safe multi-turn session store (LRU)
 │   ├── cache.py                    # TieredCache (thread-safe LRU)
 │   ├── config.py                   # AppConfig (RAG, Agent, Guardrail configs)
 │   ├── guardrails.py               # Input/Output guardrails
-│   ├── observability.py            # MetricsCollector (timers, counters, metadata)
-│   └── ...                         # Cart, catalog, order, auth services
+│   └── observability.py            # MetricsCollector (timers, counters, metadata)
+├── repository/                     # Data access layer
+│   ├── order_repository.py         # Order CRUD, status transitions, reviews
+│   ├── cart_repository.py          # Cart CRUD with availability checks
+│   ├── catalog_repository.py       # Merchant & dish queries, search
+│   ├── favorite_repository.py      # Favorite CRUD
+│   ├── coupon_repository.py        # Coupon CRUD
+│   └── user_repository.py          # User & address CRUD
 ├── tools/                          # CLI tools & evaluation
 │   ├── eval_golden_set.json        # RAG evaluation golden set (5 cases)
 │   ├── rag_evaluation.py           # RAG offline evaluation framework
@@ -227,15 +267,21 @@ smart_order/
 │   └── ...                         # Seed data, vector store ops
 ├── prompt/                         # System prompts for agent
 │   └── agent/                      # Planner, answer, memory, query rewrite prompts
-├── repository/                     # Data access layer
 ├── database/                       # Migrations & seed data
+│   └── migrations/versions/        # Alembic migration files
 ├── tests/                          # Test suite (350+ tests)
 │   ├── api/                        # API integration tests + stream tests
 │   ├── service/                    # Service unit & integration tests
 │   │   └── rag/                    # RAG-specific tests (reranker, cross-encoder, etc.)
 │   └── ...                         # E2E agent flow tests
 ├── ui/                             # Vue 3 frontend
-│   ├── src/                        # Components, views, composables, API clients
+│   ├── src/
+│   │   ├── api/                    # Axios HTTP clients (auth, cart, catalog, orders, favorites, coupons)
+│   │   ├── views/                  # Page views (Login, MerchantList, MerchantDetail, Checkout,
+│   │   │                           #   OrderList, OrderDetail, Address, SearchResults, Profile, Favorites)
+│   │   ├── components/             # Reusable components (HomeHeader, CategoryFilterBar, SearchBar, ...)
+│   │   ├── composables/            # Vue composables (useAuth, useCart, useHomepage, useAssistant)
+│   │   └── utils/                  # Utilities (currency, orderStatus, businessHours, homepage)
 │   └── package.json
 ├── docs/                           # Design docs & plans
 ├── CLAUDE.md                       # AI assistant instructions

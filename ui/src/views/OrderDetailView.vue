@@ -47,13 +47,63 @@
       <div class="detail-time">
         <p>下单时间：{{ formatTime(order.created_at) }}</p>
       </div>
+
+      <div v-if="canAdvance || canCancel || canReorder" class="detail-actions">
+        <el-button v-if="canAdvance" type="primary" :loading="advancing" @click="advanceStatus">
+          {{ advanceButtonLabel }}
+        </el-button>
+        <el-popconfirm
+          v-if="canCancel"
+          title="确定要取消该订单吗？"
+          confirm-button-text="取消订单"
+          cancel-button-text="暂不"
+          @confirm="cancelCurrentOrder"
+        >
+          <template #reference>
+            <el-button :loading="cancelling">取消订单</el-button>
+          </template>
+        </el-popconfirm>
+        <el-button v-if="canReorder" type="primary" :loading="reordering" @click="handleReorder">
+          再来一单
+        </el-button>
+      </div>
+
+      <div v-if="order.order_status === 'completed'" class="review-section">
+        <h4>订单评价</h4>
+        <template v-if="review">
+          <div class="review-display">
+            <el-rate :model-value="review.rating" disabled />
+            <p v-if="review.comment">{{ review.comment }}</p>
+            <span class="review-time">{{ formatTime(review.created_at) }}</span>
+          </div>
+        </template>
+        <template v-else-if="showReviewForm">
+          <div class="review-form">
+            <el-rate v-model="reviewForm.rating" />
+            <el-input
+              v-model="reviewForm.comment"
+              type="textarea"
+              :rows="3"
+              placeholder="写下你的评价（可选）"
+            />
+            <div class="review-form-actions">
+              <el-button type="primary" :loading="submittingReview" @click="handleSubmitReview">提交评价</el-button>
+              <el-button @click="showReviewForm = false">取消</el-button>
+            </div>
+          </div>
+        </template>
+        <template v-else>
+          <el-button @click="showReviewForm = true">去评价</el-button>
+        </template>
+      </div>
     </template>
   </section>
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
-import { getOrderDetail } from '../api/orders'
+import { computed, onUnmounted, ref, watch } from 'vue'
+import { ElMessage } from 'element-plus'
+import { advanceOrderStatus, cancelOrder, getOrderDetail, getReview, reorder, submitReview } from '../api/orders'
 import { formatCurrency } from '../utils/currency'
 import { formatOrderStatus } from '../utils/orderStatus'
 
@@ -61,9 +111,48 @@ const props = defineProps({
   orderId: { type: Number, default: null },
 })
 
+const emit = defineEmits(['reorder-done'])
+
+let eventSource = null
+
 const order = ref(null)
 const loading = ref(true)
 const errorMessage = ref('')
+const advancing = ref(false)
+
+const ADVANCE_LABELS = {
+  paid: '开始制作',
+  preparing: '配送中',
+  delivering: '确认送达',
+}
+
+const canAdvance = computed(() => {
+  if (!order.value) return false
+  return ['paid', 'preparing', 'delivering'].includes(order.value.order_status)
+})
+
+const advanceButtonLabel = computed(() => {
+  if (!order.value) return ''
+  return ADVANCE_LABELS[order.value.order_status] || '推进状态'
+})
+
+const cancelling = ref(false)
+
+const review = ref(null)
+const showReviewForm = ref(false)
+const submittingReview = ref(false)
+const reviewForm = ref({ rating: 5, comment: '' })
+const reordering = ref(false)
+
+const canReorder = computed(() => {
+  if (!order.value) return false
+  return ['completed', 'cancelled'].includes(order.value.order_status)
+})
+
+const canCancel = computed(() => {
+  if (!order.value) return false
+  return ['pending_payment', 'paid'].includes(order.value.order_status)
+})
 
 const statusTagType = (status) => {
   const map = {
@@ -84,7 +173,15 @@ const formatTime = (isoString) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
+const closeEventSource = () => {
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+}
+
 const loadOrder = async (orderId) => {
+  closeEventSource()
   if (!orderId) {
     loading.value = false
     return
@@ -93,10 +190,98 @@ const loadOrder = async (orderId) => {
   errorMessage.value = ''
   try {
     order.value = await getOrderDetail(orderId)
+    if (order.value && order.value.order_status === 'completed') {
+      await loadReview(orderId)
+    }
+    connectSSE(orderId)
   } catch (error) {
     errorMessage.value = error?.message || '加载失败，请稍后再试'
   } finally {
     loading.value = false
+  }
+}
+
+const connectSSE = (orderId) => {
+  const token = window.localStorage.getItem('smart_order_access_token')
+  if (!token) return
+
+  eventSource = new EventSource(`/api/orders/${orderId}/events?token=${encodeURIComponent(token)}`)
+  eventSource.addEventListener('status_changed', (event) => {
+    try {
+      const data = JSON.parse(event.data)
+      order.value = data
+    } catch {
+      // ignore parse errors
+    }
+  })
+  eventSource.onerror = () => {
+    closeEventSource()
+  }
+}
+
+onUnmounted(closeEventSource)
+
+const loadReview = async (orderId) => {
+  try {
+    review.value = await getReview(orderId)
+  } catch {
+    review.value = null
+  }
+}
+
+const handleSubmitReview = async () => {
+  if (!order.value || submittingReview.value) return
+  submittingReview.value = true
+  try {
+    review.value = await submitReview(order.value.checkout_order_id, reviewForm.value)
+    showReviewForm.value = false
+  } catch (error) {
+    errorMessage.value = error?.message || '评价失败，请稍后再试'
+  } finally {
+    submittingReview.value = false
+  }
+}
+
+const handleReorder = async () => {
+  if (!order.value || reordering.value) return
+  reordering.value = true
+  try {
+    const result = await reorder(order.value.checkout_order_id)
+    if (result.skipped_items && result.skipped_items.length) {
+      ElMessage.warning(`${result.skipped_items.length} 个商品已下架，已跳过`)
+    }
+    ElMessage.success('已加入购物车')
+    emit('reorder-done')
+  } catch (error) {
+    errorMessage.value = error?.message || '操作失败，请稍后再试'
+  } finally {
+    reordering.value = false
+  }
+}
+
+const advanceStatus = async () => {
+  if (!order.value || advancing.value) return
+  advancing.value = true
+  errorMessage.value = ''
+  try {
+    order.value = await advanceOrderStatus(order.value.checkout_order_id)
+  } catch (error) {
+    errorMessage.value = error?.message || '操作失败，请稍后再试'
+  } finally {
+    advancing.value = false
+  }
+}
+
+const cancelCurrentOrder = async () => {
+  if (!order.value || cancelling.value) return
+  cancelling.value = true
+  errorMessage.value = ''
+  try {
+    order.value = await cancelOrder(order.value.checkout_order_id)
+  } catch (error) {
+    errorMessage.value = error?.message || '取消失败，请稍后再试'
+  } finally {
+    cancelling.value = false
   }
 }
 
@@ -208,5 +393,45 @@ watch(() => props.orderId, loadOrder, { immediate: true })
 .error-text {
   color: #f56c6c;
   font-size: 14px;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.review-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.review-section h4 {
+  margin: 0 0 12px;
+  color: #1f2a44;
+}
+
+.review-display p {
+  margin: 8px 0 4px;
+  color: #333;
+}
+
+.review-time {
+  font-size: 13px;
+  color: #999;
+}
+
+.review-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.review-form-actions {
+  display: flex;
+  gap: 8px;
 }
 </style>
