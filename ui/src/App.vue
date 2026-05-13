@@ -6,6 +6,7 @@
         @open-login="loginOpen = true"
         @open-cart="cartOpen = true"
         @open-address="addressOpen = true"
+        @open-orders="ordersOpen = true"
       />
       <CategoryFilterBar
         :categories="categories"
@@ -26,10 +27,16 @@
       <LoginView @auth-success="loginOpen = false" />
     </el-dialog>
     <el-dialog v-model="cartOpen" width="520px" destroy-on-close>
-      <CheckoutView />
+      <CheckoutView @order-created="onOrderCreated" />
     </el-dialog>
     <el-dialog v-model="addressOpen" width="560px" destroy-on-close>
       <AddressView />
+    </el-dialog>
+    <el-dialog v-model="ordersOpen" width="600px" destroy-on-close>
+      <OrderListView @view-order="openOrderDetail" />
+    </el-dialog>
+    <el-dialog v-model="orderDetailOpen" width="600px" destroy-on-close>
+      <OrderDetailView :order-id="selectedOrderId" />
     </el-dialog>
     <el-drawer v-model="merchantDrawerOpen" size="480px" destroy-on-close>
       <MerchantDetailView :merchant-id="selectedMerchantId" @request-login="loginOpen = true" />
@@ -49,11 +56,16 @@ import CheckoutView from './views/CheckoutView.vue'
 import LoginView from './views/LoginView.vue'
 import MerchantDetailView from './views/MerchantDetailView.vue'
 import MerchantListView from './views/MerchantListView.vue'
+import OrderDetailView from './views/OrderDetailView.vue'
+import OrderListView from './views/OrderListView.vue'
 
 const loginOpen = ref(false)
 const cartOpen = ref(false)
 const addressOpen = ref(false)
 const merchantDrawerOpen = ref(false)
+const ordersOpen = ref(false)
+const orderDetailOpen = ref(false)
+const selectedOrderId = ref(null)
 const { currentUser } = useAuth()
 
 const {
@@ -71,6 +83,16 @@ const {
 const openMerchantDrawer = (merchantId) => {
   selectMerchant(merchantId)
   merchantDrawerOpen.value = true
+}
+
+const openOrderDetail = (orderId) => {
+  selectedOrderId.value = orderId
+  orderDetailOpen.value = true
+}
+
+const onOrderCreated = (orderId) => {
+  cartOpen.value = false
+  openOrderDetail(orderId)
 }
 
 onMounted(loadMerchants)

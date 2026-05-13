@@ -46,7 +46,7 @@ def test_frontend_views_guard_mount_loads_and_detail_fetches() -> None:
     assert "listMerchantDishes(1)" not in merchant_detail
 
     order_detail = (ROOT / "ui/src/views/OrderDetailView.vue").read_text(encoding="utf-8")
-    assert "const orders = await listOrders()" in order_detail
-    assert "const firstOrder = orders[0]" in order_detail
-    assert "if (!firstOrder) {" in order_detail
+    assert "orderId" in order_detail
+    assert "watch(" in order_detail
+    assert "getOrderDetail(" in order_detail
     assert "getOrderDetail(1)" not in order_detail
