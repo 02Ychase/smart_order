@@ -10,7 +10,7 @@ AI-Powered Food Delivery Assistant with Enterprise-Grade Agent & RAG Pipeline
 
 The system features a **unified 8-tool Agent**, **multi-step plan execution**, **SSE streaming**, **multi-turn conversation memory**, **Cross-Encoder reranking**, **input/output guardrails**, **structured observability**, and **centralized configuration management**.
 
-**智能外卖助手** 是一个全栈外卖点餐系统，核心是基于 **LangGraph 状态机 Agent** 和**企业级 RAG 管线**的 AI 助手。系统具备**统一 8 工具体系**、**多步计划执行**、**SSE 流式输出**、**多轮对话记忆**、**Cross-Encoder 精排**、**输入/输出安全护栏**、**结构化可观测性**和**集中配置管理**等企业级能力。
+**智能外卖助手** 是一个全栈外卖点餐系统，核心是基于 **LangGraph 状态机 Agent** 和**企业级 RAG 管线**的 AI 助手。系统具备**统一 8 工具体系**、**多步计划执行**、**SSE 流式输出**、**多轮对话记忆**、**Cross-Encoder 精排**、**输入/输出安全护栏**、**结构化可观测性**和**集中配置管理**等能力。
 
 ---
 
