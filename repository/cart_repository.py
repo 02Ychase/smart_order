@@ -65,6 +65,18 @@ class CartRepository:
         self.session.refresh(item)
         return item
 
+    def set_item_quantity(self, user_id: int, dish_id: int, quantity: int) -> bool:
+        cart = self.get_cart(user_id)
+        if cart is None:
+            return False
+        statement = select(CartItem).where(CartItem.cart_id == cart.id, CartItem.dish_id == dish_id)
+        item = self.session.scalar(statement)
+        if item is None:
+            return False
+        item.quantity = quantity
+        self.session.commit()
+        return True
+
     def remove_item(self, user_id: int, dish_id: int) -> bool:
         cart = self.get_cart(user_id)
         if cart is None:

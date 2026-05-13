@@ -28,6 +28,16 @@ def add_item(
     return CartService(session).add_item(current_user.id, payload)
 
 
+@router.put("/items/{dish_id}")
+def update_item(
+    dish_id: int,
+    payload: CartMutationRequest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_db_session),
+):
+    return CartService(session).update_item(current_user.id, dish_id, payload.quantity)
+
+
 @router.delete("/items/{dish_id}")
 def remove_item(
     dish_id: int,

@@ -8,13 +8,20 @@
     <div class="actions">
       <span v-if="currentUser" class="current-user">当前用户：{{ currentUser.username }}</span>
       <el-button plain @click="$emit('open-login')">登录</el-button>
-      <el-button plain @click="$emit('open-cart')">购物车</el-button>
+      <el-badge :value="cartItemCount" :hidden="!cartItemCount">
+        <el-button plain @click="$emit('open-cart')">购物车</el-button>
+      </el-badge>
       <el-button plain @click="$emit('open-address')">地址管理</el-button>
+      <el-button plain @click="$emit('open-orders')">我的订单</el-button>
     </div>
   </section>
 </template>
 
 <script setup>
+import { useCart } from '../../composables/useCart'
+
+const { cartItemCount } = useCart()
+
 defineProps({
   currentUser: {
     type: Object,
@@ -22,7 +29,7 @@ defineProps({
   },
 })
 
-defineEmits(['open-login', 'open-cart', 'open-address'])
+defineEmits(['open-login', 'open-cart', 'open-address', 'open-orders'])
 </script>
 
 <style scoped>
