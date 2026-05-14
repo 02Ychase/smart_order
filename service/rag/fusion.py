@@ -38,6 +38,7 @@ def reciprocal_rank_fusion(route_results: list[list[RecallCandidate]], limit: in
             fused.dense_score = max(fused.dense_score, candidate.score)
         if candidate.route in {"sparse", "sql"}:
             fused.lexical_score = max(fused.lexical_score, candidate.score)
+        # 对同一个候选，把它在每一路召回中的“排名贡献”累加起来；一路里排名越靠前贡献越大，被多路召回同时命中 贡献会叠加。
         totals[candidate.stable_key] = totals.get(candidate.stable_key, 0.0) + 1.0 / (k + candidate.rank)
 
     fused_items = list(by_key.values())

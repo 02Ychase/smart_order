@@ -208,8 +208,8 @@ class SparseVectorRecallRoute:
         self._docs: list[dict] = []
         self._doc_tokens: list[list[str]] = []
         self._doc_lengths: list[int] = []
-        self._avgdl: float = 0.0
-        self._df: dict[str, int] = {}
+        self._avgdl: float = 0.0 #文档平均长度
+        self._df: dict[str, int] = {} #记录每个token的文档频次（在多少个文档中出现过）
         self._N: int = 0
         self._built: bool = False
 
@@ -258,12 +258,15 @@ class SparseVectorRecallRoute:
             return
 
         self._docs = docs
+        # 对文档进行分词
         self._doc_tokens = [self._tokenize(d["text"]) for d in docs]
+        # 计算每个文档的长度（分词后的token数量）
         self._doc_lengths = [len(t) for t in self._doc_tokens]
         self._N = len(docs)
         self._avgdl = sum(self._doc_lengths) / max(self._N, 1)
 
         self._df = {}
+        # 记录每个token的文档频次（在多少个文档中出现过）
         for tokens in self._doc_tokens:
             for token in set(tokens):
                 self._df[token] = self._df.get(token, 0) + 1
@@ -284,8 +287,9 @@ class SparseVectorRecallRoute:
         if not queries:
             return []
 
-        doc_scores: list[float] = [0.0] * self._N
-        doc_tokens_cache = [self._tokenize(q) for q in queries]
+
+        doc_scores: list[float] = [0.0] * self._N #每个文档的分数，初始为0.0
+        doc_tokens_cache = [self._tokenize(q) for q in queries] #所有query分词后的结果
 
         for query_tokens in doc_tokens_cache:
             if not query_tokens:
@@ -293,6 +297,7 @@ class SparseVectorRecallRoute:
             for doc_idx, doc in enumerate(self._docs):
                 if doc["source_type"] not in source_types:
                     continue
+                # 多个query只取最高分的那个
                 score = self._bm25_score(query_tokens, doc_idx)
                 if score > doc_scores[doc_idx]:
                     doc_scores[doc_idx] = score
@@ -320,19 +325,25 @@ class SparseVectorRecallRoute:
         return candidates
 
     # ── scoring ─────────────────────────────────────────────────────
-
+    # 简单理解：query 里的词，如果在某个菜品文档中出现，并且这个词不是所有文档都有的泛词，那么这个菜品分数更高
     def _bm25_score(self, query_tokens: list[str], doc_idx: int) -> float:
         """BM25 with Robertson-Sparck Jones smoothed IDF."""
+        # 获取当前文档的长度和分词结果
         doc_len = self._doc_lengths[doc_idx]
         doc_tokens = self._doc_tokens[doc_idx]
         score = 0.0
 
         for token in query_tokens:
+            # 计算query中的token在所有文档中出现的次数
             df = self._df.get(token, 0)
             if df == 0:
                 continue
+            # 计算IDF，使用Robertson-Sparck Jones平滑方法，避免极端值
+            # 一个词出现的文档越少，它越稀有，IDF 越高，对分数贡献越大。
             idf = math.log((self._N - df + 0.5) / (df + 0.5) + 1.0)
+            # 计算TF，当前 query token 在当前文档中出现了多少次。
             tf = doc_tokens.count(token)
+            # tf 越大，分数越高；但不会无限增长。
             numerator = tf * (self._BM25_K1 + 1)
             denominator = tf + self._BM25_K1 * (1 - self._BM25_B + self._BM25_B * doc_len / self._avgdl)
             score += idf * numerator / denominator
