@@ -81,6 +81,9 @@ const global = {
       props: ['description'],
       template: '<div class="empty-state">{{ description }}</div>',
     },
+    'el-tag': {
+      template: '<span><slot /></span>',
+    },
     'el-form': {
       template: '<form><slot /></form>',
     },
@@ -593,7 +596,7 @@ describe('Task 11 guarded views', () => {
     expect(wrapper.emitted('auth-success')).toBeTruthy()
   })
 
-  test('HomeHeader shows the current username while keeping the login button', () => {
+  test('HomeHeader renders the Meituan-style current-user nav', () => {
     const wrapper = mount(HomeHeader, {
       props: {
         currentUser: {
@@ -606,10 +609,12 @@ describe('Task 11 guarded views', () => {
       global,
     })
 
-    expect(wrapper.text()).toContain('当前用户：new_user')
-    expect(wrapper.text()).toContain('登录')
+    expect(wrapper.text()).toContain('smart_order')
+    expect(wrapper.text()).toContain('上海')
+    expect(wrapper.text()).toContain('我的订单')
+    expect(wrapper.text()).toContain('收藏')
     expect(wrapper.text()).toContain('购物车')
-    expect(wrapper.text()).toContain('地址管理')
+    expect(wrapper.find('.avatar').text()).toBe('N')
   })
 })
 

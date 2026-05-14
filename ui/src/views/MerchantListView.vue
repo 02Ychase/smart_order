@@ -1,13 +1,14 @@
 <template>
   <section class="merchant-wall">
-    <p v-if="loading">加载中...</p>
-    <p v-else-if="errorMessage">{{ errorMessage }}</p>
+    <div v-if="loading" class="merchant-state">加载中...</div>
+    <div v-else-if="errorMessage" class="merchant-state merchant-state--error">{{ errorMessage }}</div>
     <el-empty v-else-if="!merchants.length" description="暂无商家" />
-    <div v-else class="merchant-grid">
+    <div v-else class="merchant-panel">
       <article
-        v-for="merchant in merchants"
+        v-for="(merchant, index) in merchants"
         :key="merchant.id"
-        class="merchant-card"
+        class="merchant-row"
+        :class="{ 'merchant-row--first': index === 0 }"
         @click="$emit('select-merchant', merchant.id)"
       >
         <div class="merchant-cover" :style="merchantCover(merchant).imageSrc ? undefined : merchantCover(merchant).gradientStyle">
@@ -17,16 +18,46 @@
             :alt="`${merchant.name} 封面图`"
             data-test="merchant-cover-image"
           />
-          <span class="cover-badge">{{ merchant.homepage_category }}</span>
+          <span v-if="coverPromo(merchant)" class="cover-promo">{{ coverPromo(merchant) }}</span>
+          <span class="cover-category">{{ merchant.homepage_category }}</span>
+          <div class="cover-shade" aria-hidden="true"></div>
+          <div v-if="isClosed(merchant)" class="closed-mask">休息中</div>
         </div>
+
         <div class="merchant-content">
-          <div class="merchant-topline">
+          <div class="merchant-title-row">
             <h3>{{ merchant.name }}</h3>
-            <span>{{ merchant.rating.toFixed(1) }}</span>
+            <span v-if="isFeatured(merchant)" class="brand-tag">品牌</span>
           </div>
-          <p class="category">{{ merchant.homepage_category }}</p>
-          <p class="promo">{{ merchant.promo_text }}</p>
-          <p class="meta">{{ merchant.district }} · 配送费 {{ formatCurrency(merchant.delivery_fee) }}</p>
+
+          <div class="rating-row">
+            <span class="stars" aria-hidden="true">
+              {{ filledStars(merchant.rating) }}<span>{{ emptyStars(merchant.rating) }}</span>
+            </span>
+            <strong>{{ ratingText(merchant.rating) }}</strong>
+            <span>月售 {{ salesText(merchant) }}</span>
+          </div>
+
+          <div class="promo-row">
+            <span
+              v-for="badge in promoBadges(merchant)"
+              :key="`${merchant.id}-${badge.kind}-${badge.text}`"
+              class="promo-badge"
+              :class="`promo-badge--${badge.kind}`"
+            >
+              {{ badge.text }}
+            </span>
+          </div>
+
+          <div class="meta-row">
+            <span class="delivery-time">{{ deliveryMinutes(merchant) }}分钟</span>
+            <span>·</span>
+            <span>{{ distanceText(merchant) }}km</span>
+            <span>·</span>
+            <span>起送 {{ mtYuan(minOrder(merchant)) }}</span>
+            <span>·</span>
+            <span>配送费 {{ mtYuan(merchant.delivery_fee) }}</span>
+          </div>
         </div>
       </article>
     </div>
@@ -34,7 +65,6 @@
 </template>
 
 <script setup>
-import { formatCurrency } from '../utils/currency'
 import { getMerchantCover } from '../utils/homepage'
 
 defineProps({
@@ -46,81 +76,297 @@ defineProps({
 defineEmits(['select-merchant'])
 
 const merchantCover = (merchant) => getMerchantCover(merchant.homepage_category)
+
+const clampStars = (value) => Math.min(5, Math.max(0, Math.round(Number(value || 0))))
+const filledStars = (value) => '★★★★★'.slice(0, clampStars(value))
+const emptyStars = (value) => '★★★★★'.slice(clampStars(value))
+const ratingText = (value) => Number(value || 0).toFixed(1)
+
+const mtYuan = (value) => {
+  const numberValue = Number(value || 0)
+  const digits = numberValue % 1 === 0 ? 0 : 1
+  return `¥${numberValue.toFixed(digits)}`
+}
+
+const salesText = (merchant) => merchant.sales || merchant.monthly_sales || merchant.monthly_sales_text || '300+'
+const deliveryMinutes = (merchant) => merchant.delivery_minutes || merchant.delivery_time_minutes || merchant.estimated_delivery_minutes || 28
+const distanceText = (merchant) => Number(merchant.distance_km || merchant.distance || 1.2).toFixed(1)
+const minOrder = (merchant) => merchant.min_order_amount || merchant.min_order || merchant.minimum_order_amount || 20
+const isFeatured = (merchant) => Boolean(merchant.featured || merchant.is_featured)
+const isClosed = (merchant) => merchant.open === false || merchant.status === 'closed'
+
+const coverPromo = (merchant) => {
+  const text = (merchant.promo_text || '').split(/[·，,\/]/)[0]?.trim()
+  return text || '满50减8'
+}
+
+const promoKind = (text) => {
+  if (text.includes('红包')) return 'hongbao'
+  if (text.includes('折')) return 'discount'
+  if (text.includes('新')) return 'newcomer'
+  if (text.includes('免')) return 'free'
+  return 'manjian'
+}
+
+const promoBadges = (merchant) => {
+  const pieces = (merchant.promo_text || '')
+    .split(/[·，,\/]/)
+    .map((text) => text.trim())
+    .filter(Boolean)
+    .slice(0, 3)
+
+  if (!pieces.length) {
+    return [
+      { kind: 'manjian', text: '满50减8' },
+      { kind: 'newcomer', text: '新客券' },
+    ]
+  }
+
+  const badges = pieces.map((text) => ({ kind: promoKind(text), text }))
+  if (!badges.some((badge) => badge.kind === 'newcomer')) {
+    badges.push({ kind: 'newcomer', text: '新客券' })
+  }
+  if (isFeatured(merchant)) {
+    badges.push({ kind: 'discount', text: '折' })
+  }
+  return badges.slice(0, 3)
+}
 </script>
 
 <style scoped>
-.merchant-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 20px;
+.merchant-wall {
+  width: 100%;
 }
 
-.merchant-card {
-  overflow: hidden;
-  border-radius: 24px;
-  background: #fff;
-  box-shadow: 0 18px 36px rgba(44, 76, 128, 0.1);
+.merchant-panel,
+.merchant-state {
+  border-radius: var(--so-r-lg);
+  background: var(--so-surface);
+  box-shadow: var(--so-shadow-card);
+}
+
+.merchant-panel {
+  padding: 0 20px 8px;
+}
+
+.merchant-state {
+  padding: 40px 0;
+  color: var(--so-ink-4);
+  font-size: 14px;
+  text-align: center;
+}
+
+.merchant-state--error {
+  color: var(--so-red);
+}
+
+.merchant-row {
+  display: flex;
+  gap: 14px;
+  padding: 14px;
+  border-top: 1px solid var(--so-surface-line);
+  border-radius: var(--so-r-md);
+  background: var(--so-surface);
   cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.merchant-row--first {
+  border-top: 0;
+}
+
+.merchant-row:hover {
+  background: var(--so-yellow-faint);
 }
 
 .merchant-cover {
   position: relative;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
-  min-height: 132px;
-  padding: 18px;
-  color: #385071;
-  font-weight: 600;
+  width: 96px;
+  height: 96px;
+  flex-shrink: 0;
+  overflow: hidden;
+  border-radius: var(--so-r-sm);
+  background: var(--so-surface-line);
 }
 
 .merchant-cover img {
-  position: absolute;
-  inset: 0;
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
-.cover-badge {
-  position: relative;
+.cover-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0) 58%, rgba(0, 0, 0, 0.18) 100%);
+}
+
+.cover-promo {
+  position: absolute;
+  top: 8px;
+  left: 8px;
   z-index: 1;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.88);
+  max-width: 78px;
+  overflow: hidden;
+  padding: 2px 7px;
+  border-radius: 3px;
+  background: var(--so-red);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cover-category {
+  position: absolute;
+  bottom: 7px;
+  left: 8px;
+  z-index: 1;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  writing-mode: vertical-rl;
+}
+
+.closed-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .merchant-content {
-  padding: 18px;
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.merchant-topline {
+.merchant-title-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
 }
 
-.merchant-topline h3,
-.category,
-.promo,
-.meta {
+.merchant-title-row h3 {
+  min-width: 0;
+  flex: 1;
   margin: 0;
+  overflow: hidden;
+  color: var(--so-ink-1);
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.category {
-  margin-top: 10px;
-  color: #6b7fa0;
+.brand-tag {
+  flex-shrink: 0;
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: var(--so-ink-1);
+  color: var(--so-yellow);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
 }
 
-.promo {
-  margin-top: 8px;
-  color: #2c456a;
-  font-weight: 600;
+.rating-row,
+.promo-row,
+.meta-row {
+  display: flex;
+  align-items: center;
 }
 
-.meta {
-  margin-top: 12px;
-  color: #7d8da8;
+.rating-row {
+  gap: 8px;
+  color: var(--so-ink-4);
+  font-size: 12px;
+}
+
+.rating-row strong {
+  color: var(--so-gold);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.stars {
+  color: var(--so-gold);
+  font-size: 11px;
+  letter-spacing: -1px;
+  line-height: 1;
+}
+
+.stars span {
+  color: var(--so-border-2);
+}
+
+.promo-row {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.promo-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.promo-badge--manjian {
+  border: 1px solid var(--so-red);
+  background: #fff;
+  color: var(--so-red);
+}
+
+.promo-badge--hongbao {
+  background: var(--so-red);
+  color: #fff;
+}
+
+.promo-badge--discount {
+  background: var(--so-yellow);
+  color: var(--so-ink-1);
+}
+
+.promo-badge--newcomer {
+  background: var(--so-orange);
+  color: #fff;
+}
+
+.promo-badge--free {
+  border: 1px solid #b7eb8f;
+  background: var(--so-success-soft);
+  color: var(--so-success);
+}
+
+.meta-row {
+  gap: 10px;
+  margin-top: auto;
+  color: var(--so-ink-3);
+  font-size: 12px;
+}
+
+.delivery-time {
+  color: var(--so-ink-1);
+  font-weight: 800;
 }
 </style>

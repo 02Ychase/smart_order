@@ -1,39 +1,51 @@
 <template>
   <section class="favorite-view">
-    <header class="dialog-header">
-      <h2>我的收藏</h2>
-    </header>
+    <div class="modal-header">
+      <div>
+        <h2>我的收藏</h2>
+        <p class="subtitle">{{ favorites.length }} 家商家</p>
+      </div>
+      <button class="close-x" @click="$emit('close')">×</button>
+    </div>
 
-    <p v-if="loading">加载中...</p>
-    <p v-else-if="errorMessage" class="error-text">{{ errorMessage }}</p>
-    <el-empty v-else-if="!favorites.length" description="暂无收藏" />
+    <div class="modal-body mt-scroll">
+      <p v-if="loading" class="state-text">加载中...</p>
+      <p v-else-if="errorMessage" class="state-text state-text--error">{{ errorMessage }}</p>
+      <div v-else-if="!favorites.length" class="empty-state">
+        <div class="empty-heart">♡</div>
+        <p>还没有收藏的商家</p>
+      </div>
 
-    <template v-else>
       <div
         v-for="fav in favorites"
+        v-else
         :key="fav.id"
-        class="favorite-card"
+        class="fav-row"
         @click="emit('select-merchant', fav.merchant_id)"
       >
-        <span class="favorite-name">{{ fav.merchant_name }}</span>
-        <el-button
-          size="small"
-          type="danger"
-          text
-          @click.stop="removeFavorite(fav.merchant_id)"
-        >
-          取消收藏
-        </el-button>
+        <div class="fav-cover">
+          <span class="fav-cover-emoji">🏪</span>
+        </div>
+        <div class="fav-info">
+          <p class="fav-name">{{ fav.merchant_name }}</p>
+          <div v-if="fav.rating" class="fav-meta">
+            <SoStars :value="fav.rating" :size="10" />
+            <span v-if="fav.monthly_sales" class="fav-sales">月售 {{ fav.monthly_sales }}</span>
+          </div>
+          <p v-if="fav.district || fav.category" class="fav-loc">{{ fav.district }}{{ fav.category ? ' · ' + fav.category : '' }}</p>
+        </div>
+        <button class="heart-btn" @click.stop="removeFavorite(fav.merchant_id)">♥</button>
       </div>
-    </template>
+    </div>
   </section>
 </template>
 
 <script setup>
 import { onMounted, ref } from 'vue'
 import { listFavorites, toggleFavorite } from '../api/favorites'
+import SoStars from '../components/shared/SoStars.vue'
 
-const emit = defineEmits(['select-merchant'])
+const emit = defineEmits(['select-merchant', 'close'])
 
 const favorites = ref([])
 const loading = ref(true)
@@ -64,37 +76,86 @@ onMounted(loadFavorites)
 </script>
 
 <style scoped>
-.dialog-header {
+.favorite-view {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
+  flex-direction: column;
+  max-height: 78vh;
+  color: var(--so-ink-1);
 }
 
-.favorite-card {
+.modal-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
-  border: 1px solid #eee;
-  border-radius: 8px;
-  margin-bottom: 8px;
+  justify-content: space-between;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--so-border-1);
+}
+
+.modal-header h2 { margin: 0; font-size: 18px; font-weight: 700; }
+.subtitle { margin: 4px 0 0; color: var(--so-ink-4); font-size: 13px; }
+
+.close-x {
+  width: 28px; height: 28px; border: none; background: transparent;
+  cursor: pointer; color: var(--so-ink-4); font-size: 22px; line-height: 1; padding: 0;
+}
+
+.modal-body { flex: 1; overflow-y: auto; padding: 12px 24px 24px; }
+
+/* Empty state */
+.empty-state {
+  padding: 60px 0;
+  text-align: center;
+  color: var(--so-ink-4);
+}
+
+.empty-heart { font-size: 60px; opacity: 0.3; }
+.empty-state p { margin: 12px 0 0; font-size: 14px; }
+
+/* Favorite row */
+.fav-row {
+  display: flex;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--so-surface-line);
   cursor: pointer;
-  transition: box-shadow 0.2s;
+  transition: background 0.15s;
 }
 
-.favorite-card:hover {
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+.fav-row:hover { background: var(--so-yellow-faint); margin: 0 -12px; padding: 12px; border-radius: var(--so-r-sm); }
+
+.fav-cover {
+  width: 64px; height: 64px; border-radius: var(--so-r-sm);
+  background: linear-gradient(135deg, #fff3e0, #ffe0b2);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
 }
 
-.favorite-name {
-  font-weight: 600;
-  color: #1f2a44;
+.fav-cover-emoji { font-size: 28px; }
+
+.fav-info { flex: 1; min-width: 0; }
+.fav-name { margin: 0; font-size: 15px; font-weight: 700; color: var(--so-ink-1); }
+
+.fav-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12px;
 }
 
-.error-text {
-  color: #f56c6c;
-  font-size: 14px;
+.fav-sales { color: var(--so-ink-4); }
+.fav-loc { margin: 4px 0 0; font-size: 12px; color: var(--so-ink-3); }
+
+.heart-btn {
+  align-self: flex-start;
+  background: transparent; border: none; cursor: pointer;
+  color: var(--so-red); font-size: 18px;
+  padding: 4px;
+  transition: transform 0.15s;
 }
+
+.heart-btn:hover { transform: scale(1.2); }
+
+.state-text { padding: 60px 0; text-align: center; color: var(--so-ink-4); font-size: 14px; }
+.state-text--error { color: var(--so-red); }
 </style>

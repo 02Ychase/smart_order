@@ -1,38 +1,37 @@
 <template>
   <section class="order-list-view">
-    <header class="dialog-header">
-      <h2>我的订单</h2>
-    </header>
+    <div class="modal-header">
+      <div>
+        <h2>我的订单</h2>
+        <p class="subtitle">共 {{ orders.length }} 单</p>
+      </div>
+      <button class="close-x" @click="$emit('close')">×</button>
+    </div>
 
-    <p v-if="loading">加载中...</p>
-    <p v-else-if="errorMessage" class="error-text">{{ errorMessage }}</p>
-    <el-empty v-else-if="!orders.length" description="暂无订单" />
+    <div class="modal-body mt-scroll">
+      <p v-if="loading" class="state-text">加载中...</p>
+      <p v-else-if="errorMessage" class="state-text state-text--error">{{ errorMessage }}</p>
+      <div v-else-if="!orders.length" class="state-text">暂无订单</div>
 
-    <template v-else>
-      <div
+      <article
         v-for="order in orders"
+        v-else
         :key="order.checkout_order_id"
         class="order-card"
         @click="emit('view-order', order.checkout_order_id)"
       >
-        <div class="order-card-header">
+        <div class="order-top">
           <span class="order-id">订单 #{{ order.checkout_order_id }}</span>
-          <el-tag :type="statusTagType(order.order_status)" size="small">
-            {{ formatOrderStatus(order.order_status) }}
-          </el-tag>
+          <span class="status-pill" :style="statusStyle(order.order_status)">{{ statusLabel(order.order_status) }}</span>
         </div>
-        <div class="order-card-body">
-          <p>{{ order.address_snapshot }}</p>
-          <div class="order-merchants">
-            <span v-for="mo in order.merchant_orders" :key="mo.merchant_order_id">
-              {{ mo.merchant_name }}
-            </span>
-          </div>
+        <p class="order-address">{{ order.address_snapshot }}</p>
+        <div class="merchant-chips">
+          <span v-for="mo in order.merchant_orders" :key="mo.merchant_order_id" class="merchant-chip">{{ mo.merchant_name }}</span>
         </div>
-        <div class="order-card-footer">
+        <div class="order-bottom">
           <span class="order-time">{{ formatTime(order.created_at) }}</span>
-          <div class="footer-right">
-            <span class="order-amount">{{ formatCurrency(order.payable_amount) }}</span>
+          <div class="bottom-right">
+            <SoPrice :value="order.payable_amount" :size="16" />
             <el-popconfirm
               v-if="['pending_payment', 'paid'].includes(order.order_status)"
               title="确定要取消该订单吗？"
@@ -41,49 +40,48 @@
               @confirm.stop="cancelOrderFromList(order.checkout_order_id)"
             >
               <template #reference>
-                <el-button size="small" :loading="cancellingId === order.checkout_order_id" @click.stop>
-                  取消
-                </el-button>
+                <button class="cancel-mini" :disabled="cancellingId === order.checkout_order_id" @click.stop>取消</button>
               </template>
             </el-popconfirm>
           </div>
         </div>
-      </div>
-    </template>
+      </article>
+    </div>
   </section>
 </template>
 
 <script setup>
 import { onMounted, ref } from 'vue'
 import { cancelOrder, listOrders } from '../api/orders'
-import { formatCurrency } from '../utils/currency'
-import { formatOrderStatus } from '../utils/orderStatus'
+import SoPrice from '../components/shared/SoPrice.vue'
 
-const emit = defineEmits(['view-order'])
+const emit = defineEmits(['view-order', 'close'])
 
 const orders = ref([])
 const loading = ref(true)
 const errorMessage = ref('')
-
-const statusTagType = (status) => {
-  const map = {
-    pending_payment: 'warning',
-    paid: 'success',
-    preparing: 'primary',
-    delivering: 'primary',
-    completed: 'info',
-    cancelled: 'danger',
-  }
-  return map[status] || 'info'
-}
-
 const cancellingId = ref(null)
 
-const formatTime = (isoString) => {
-  if (!isoString) return ''
-  const d = new Date(isoString)
-  const pad = (n) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+const STATUS_META = {
+  pending_payment: { label: '待支付', color: '#ff8f1f', bg: '#fff7e6' },
+  paid:            { label: '已支付', color: '#52c41a', bg: '#f6ffed' },
+  preparing:       { label: '制作中', color: '#fe5c34', bg: '#fff3eb' },
+  delivering:      { label: '配送中', color: '#fe5c34', bg: '#fff3eb' },
+  completed:       { label: '已完成', color: '#999',    bg: '#f2f2f2' },
+  cancelled:       { label: '已取消', color: '#ff3b30', bg: '#fef0f0' },
+}
+
+const statusLabel = (s) => STATUS_META[s]?.label || s
+const statusStyle = (s) => {
+  const m = STATUS_META[s] || {}
+  return { color: m.color, background: m.bg }
+}
+
+const formatTime = (iso) => {
+  if (!iso) return ''
+  const d = new Date(iso)
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
 const cancelOrderFromList = async (orderId) => {
@@ -91,106 +89,112 @@ const cancelOrderFromList = async (orderId) => {
   try {
     await cancelOrder(orderId)
     orders.value = await listOrders()
-  } catch (error) {
-    errorMessage.value = error?.message || '取消失败，请稍后再试'
-  } finally {
-    cancellingId.value = null
-  }
+  } catch (e) {
+    errorMessage.value = e?.message || '取消失败'
+  } finally { cancellingId.value = null }
 }
 
 onMounted(async () => {
-  try {
-    orders.value = await listOrders()
-  } catch (error) {
-    errorMessage.value = error?.message || '加载失败，请稍后再试'
-  } finally {
-    loading.value = false
-  }
+  try { orders.value = await listOrders() } catch (e) { errorMessage.value = e?.message || '加载失败' } finally { loading.value = false }
 })
 </script>
 
 <style scoped>
-.dialog-header {
+.order-list-view {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
+  flex-direction: column;
+  max-height: 78vh;
+  color: var(--so-ink-1);
 }
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--so-border-1);
+}
+
+.modal-header h2 { margin: 0; font-size: 18px; font-weight: 700; }
+.subtitle { margin: 4px 0 0; color: var(--so-ink-4); font-size: 13px; }
+
+.close-x {
+  width: 28px; height: 28px; border: none; background: transparent;
+  cursor: pointer; color: var(--so-ink-4); font-size: 22px; line-height: 1; padding: 0;
+}
+
+.modal-body { flex: 1; overflow-y: auto; padding: 12px 24px 24px; }
 
 .order-card {
   padding: 16px;
-  border: 1px solid #eee;
-  border-radius: 8px;
+  border: 1px solid var(--so-border-1);
+  border-radius: var(--so-r-md);
   margin-bottom: 12px;
   cursor: pointer;
-  transition: box-shadow 0.2s;
+  transition: all 0.15s;
+  background: var(--so-surface);
 }
 
-.order-card:hover {
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
-}
+.order-card:hover { box-shadow: var(--so-shadow-card); }
 
-.order-card-header {
+.order-top {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
 }
 
-.order-id {
+.order-id { font-weight: 600; font-size: 14px; }
+
+.status-pill {
+  font-size: 12px;
   font-weight: 600;
-  color: #1f2a44;
+  padding: 3px 10px;
+  border-radius: var(--so-r-pill);
 }
 
-.order-card-body p {
-  margin: 4px 0;
-  color: #666;
-  font-size: 14px;
+.order-address {
+  margin: 8px 0 0;
+  color: var(--so-ink-3);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
-.order-merchants {
+.merchant-chips {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
-  margin-top: 4px;
+  margin: 8px 0;
 }
 
-.order-merchants span {
+.merchant-chip {
   padding: 2px 8px;
-  background: #f0f5ff;
-  border-radius: 4px;
-  font-size: 13px;
-  color: #409eff;
+  background: var(--so-yellow-soft);
+  color: #866a00;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: 500;
 }
 
-.order-card-footer {
+.order-bottom {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid #f0f0f0;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--so-surface-line);
 }
 
-.order-time {
-  font-size: 13px;
-  color: #999;
+.order-time { font-size: 12px; color: var(--so-ink-4); }
+.bottom-right { display: flex; align-items: center; gap: 10px; }
+
+.cancel-mini {
+  height: 26px; padding: 0 12px;
+  background: #fff; color: var(--so-ink-3);
+  border: 1px solid var(--so-border-2);
+  border-radius: var(--so-r-pill);
+  font-size: 12px; cursor: pointer;
 }
 
-.order-amount {
-  font-weight: 600;
-  color: #1f2a44;
-}
-
-.footer-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.error-text {
-  color: #f56c6c;
-  font-size: 14px;
-}
+.state-text { padding: 60px 0; text-align: center; color: var(--so-ink-4); font-size: 14px; }
+.state-text--error { color: var(--so-red); }
 </style>

@@ -1,0 +1,49 @@
+:root {
+  --el-color-primary: #fe5c34;
+  --el-color-primary-light-3: #ff8f6a;
+  --el-color-primary-light-5: #ffb59c;
+  --el-color-primary-light-7: #ffd6c2;
+  --el-color-primary-light-8: #ffe5d8;
+  --el-color-primary-light-9: #fff0eb;
+  --el-color-primary-dark-2: #d04425;
+
+  --el-color-warning: #ff8f1f;
+  --el-color-danger: #ff3b30;
+  --el-color-success: #52c41a;
+
+  --el-border-radius-base: 8px;
+  --el-border-radius-small: 6px;
+  --el-border-radius-round: 999px;
+
+  --el-text-color-primary: #1a1a1a;
+  --el-text-color-regular: #333333;
+  --el-text-color-secondary: #666666;
+  --el-text-color-placeholder: #999999;
+
+  --el-font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", -apple-system, "Helvetica Neue", Arial, sans-serif;
+}
+
+.el-button {
+  font-weight: 700;
+}
+
+.el-button--primary {
+  --el-button-bg-color: var(--so-orange);
+  --el-button-border-color: var(--so-orange);
+  --el-button-hover-bg-color: #ff8f6a;
+  --el-button-hover-border-color: #ff8f6a;
+  --el-button-active-bg-color: #d04425;
+  --el-button-active-border-color: #d04425;
+}
+
+.el-dialog {
+  --el-dialog-border-radius: var(--so-r-lg);
+}
+
+.el-drawer {
+  --el-drawer-bg-color: var(--so-surface);
+}
+
+.el-input__wrapper {
+  border-radius: var(--so-r-sm);
+}

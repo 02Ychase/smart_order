@@ -33,6 +33,7 @@ describe('FloatingAssistant', () => {
     })
 
     const wrapper = mount(FloatingAssistant, {
+      props: { initialOpen: true },
       global: {
         stubs: {
           'el-input': {
@@ -51,7 +52,7 @@ describe('FloatingAssistant', () => {
     })
 
     await wrapper.find('input').setValue('推荐几种川菜')
-    await wrapper.find('button').trigger('click')
+    await wrapper.find('.send-btn').trigger('click')
     await flushPromises()
 
     expect(streamChatWithAssistant).toHaveBeenCalledWith(
@@ -106,6 +107,7 @@ describe('FloatingAssistant', () => {
     })
 
     const wrapper = mount(FloatingAssistant, {
+      props: { initialOpen: true },
       global: {
         stubs: {
           'el-input': {
@@ -124,14 +126,14 @@ describe('FloatingAssistant', () => {
     })
 
     await wrapper.find('input').setValue('推荐几种川菜，2个人吃，100元以内，不要花生')
-    await wrapper.find('button').trigger('click')
+    await wrapper.find('.send-btn').trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('鱼香肉丝')
     expect(wrapper.text()).toContain('兰姨小炒')
     expect(wrapper.text()).toContain('匹配川菜偏好')
     expect(wrapper.text()).toContain('鱼香肉丝｜兰姨小炒')
-    expect(wrapper.find('.assistant-bubble p').classes()).toContain('assistant-message-text')
+    expect(wrapper.find('.bubble.assistant').exists()).toBe(true)
   })
 
   test('renders pending action confirmation', async () => {
@@ -153,6 +155,7 @@ describe('FloatingAssistant', () => {
     })
 
     const wrapper = mount(FloatingAssistant, {
+      props: { initialOpen: true },
       global: {
         stubs: {
           'el-input': {
@@ -171,7 +174,7 @@ describe('FloatingAssistant', () => {
     })
 
     await wrapper.find('input').setValue('推荐川菜并加入购物车')
-    await wrapper.find('button').trigger('click')
+    await wrapper.find('.send-btn').trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('待确认操作')

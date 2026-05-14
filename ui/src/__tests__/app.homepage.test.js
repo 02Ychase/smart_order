@@ -55,6 +55,10 @@ describe('homepage shell', () => {
           'el-empty': { template: '<div class="empty-state"></div>' },
           'el-tag': { template: '<span><slot /></span>' },
           'el-scrollbar': { template: '<div><slot /></div>' },
+          'el-popconfirm': { template: '<span><slot /></span>' },
+          'el-rate': { template: '<span></span>' },
+          'el-form': { template: '<form><slot /></form>' },
+          'el-form-item': { template: '<label><slot /></label>' },
           HomeHeader: false,
           CategoryFilterBar: false,
           MerchantListView: false,
@@ -70,17 +74,20 @@ describe('homepage shell', () => {
     await nextTick()
 
     expect(loadMerchants).toHaveBeenCalled()
-    expect(wrapper.text()).toContain('smart_order 智能外卖平台')
+    expect(wrapper.text()).toContain('smart_order')
+    expect(wrapper.text()).toContain('上海')
     expect(wrapper.text()).toContain('登录')
     expect(wrapper.text()).toContain('购物车')
-    expect(wrapper.text()).toContain('地址管理')
+    expect(wrapper.text()).toContain('新客立减')
+    expect(wrapper.text()).toContain('限时秒杀')
+    expect(wrapper.text()).toContain('美食')
     expect(wrapper.text()).toContain('全部')
     expect(wrapper.text()).toContain('湘菜')
     expect(wrapper.text()).toContain('经典川味')
     expect(wrapper.text()).toContain('你好，欢迎来到 smart_order。')
     expect(wrapper.text()).toContain('我可以根据你的口味、人数和预算')
     expect(wrapper.text()).toContain('智能助手')
-    expect(wrapper.text()).toContain('发送')
+    expect(wrapper.text()).toContain('➤')
     expect(consoleWarnSpy).not.toHaveBeenCalled()
   })
 
@@ -104,6 +111,10 @@ describe('homepage shell', () => {
           'el-empty': { template: '<div class="empty-state"></div>' },
           'el-tag': { template: '<span><slot /></span>' },
           'el-scrollbar': { template: '<div><slot /></div>' },
+          'el-popconfirm': { template: '<span><slot /></span>' },
+          'el-rate': { template: '<span></span>' },
+          'el-form': { template: '<form><slot /></form>' },
+          'el-form-item': { template: '<label><slot /></label>' },
           HomeHeader: false,
           CategoryFilterBar: false,
           MerchantListView: {

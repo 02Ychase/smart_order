@@ -1,106 +1,123 @@
 <template>
-  <aside class="assistant-panel">
-    <div class="assistant-header">
-      <span>智能助手</span>
-      <span class="status">在线</span>
+  <!-- Launcher button -->
+  <button v-if="!panelOpen" class="launcher" @click="panelOpen = true">
+    <span class="launcher-icon">AI</span>
+  </button>
+
+  <!-- Panel -->
+  <aside v-else class="assistant-panel">
+    <!-- Header -->
+    <div class="panel-header">
+      <div class="header-left">
+        <div class="ai-avatar-sm">AI</div>
+        <div>
+          <p class="header-title">智能助手</p>
+          <p class="header-sub">● 在线 · 帮你挑、帮你点</p>
+        </div>
+      </div>
+      <button class="header-close" @click="panelOpen = false">×</button>
     </div>
 
-    <el-scrollbar class="assistant-scroll">
-      <div v-for="(message, index) in messages" :key="`${message.role}-${index}`" class="assistant-message-row" :class="`assistant-message-row--${message.role}`">
-        <div class="assistant-avatar">{{ message.role === 'assistant' ? 'AI' : '我' }}</div>
-        <div class="assistant-bubble">
-          <p class="assistant-message-text">{{ message.text }}</p>
+    <!-- Messages -->
+    <div ref="scrollArea" class="panel-messages mt-scroll">
+      <div v-for="(message, index) in messages" :key="`msg-${index}`" class="bubble-row" :class="message.role">
+        <div class="bubble-avatar" :class="message.role">{{ message.role === 'assistant' ? 'AI' : '我' }}</div>
+        <div class="bubble" :class="message.role">{{ message.text }}</div>
+      </div>
+
+      <div v-if="loading" class="thinking">
+        <span class="thinking-dot" /> AI 正在思考…
+      </div>
+
+      <!-- Constraint chips -->
+      <div v-if="extractedConstraints.length && !loading" class="section-stack">
+        <p class="section-label">已识别条件</p>
+        <div class="chip-row">
+          <span v-for="c in extractedConstraints" :key="c" class="chip chip--warm">{{ c }}</span>
         </div>
       </div>
 
-      <div v-if="lastResponseType === 'clarification'" class="assistant-section assistant-clarification">
-        <div class="assistant-section-title">需要更多信息</div>
-        <div class="assistant-bubble assistant-bubble--clarification">
-          <p>{{ messages[messages.length - 1]?.text }}</p>
+      <!-- Recommendation cards -->
+      <div v-if="recommendations.length && !loading" class="section-stack">
+        <p class="section-label">推荐结果</p>
+        <div v-for="(item, i) in recommendations" :key="`rec-${i}`" class="rec-card">
+          <div class="rec-thumb" :style="{ background: recBg(item) }">{{ recGlyph(item) }}</div>
+          <div class="rec-body">
+            <p class="rec-name">{{ item.dish_name || item.merchant_name }}</p>
+            <p class="rec-merchant">{{ item.merchant_name }}</p>
+            <p class="rec-reason">{{ item.reason }}</p>
+            <div class="rec-footer">
+              <SoPrice :value="item.price" :size="15" />
+            </div>
+          </div>
         </div>
       </div>
 
-      <div v-if="lastResponseType === 'action_pending'" class="assistant-section assistant-action-pending">
-        <div class="assistant-section-title">功能预告</div>
-        <div class="assistant-bubble assistant-bubble--pending">
-          <p>{{ messages[messages.length - 1]?.text }}</p>
+      <!-- Comparisons -->
+      <div v-if="comparisons.length && !loading" class="section-stack">
+        <p class="section-label">对比结果</p>
+        <div v-for="item in comparisons" :key="item.merchant_id" class="info-card">
+          <p class="info-title">{{ item.merchant_name }}</p>
+          <p class="info-body">{{ item.summary }}</p>
         </div>
       </div>
 
-      <div v-if="lastResponseType === 'greeting'" class="assistant-section assistant-greeting">
-        <div class="assistant-bubble assistant-bubble--greeting">
-          <p>{{ messages[messages.length - 1]?.text }}</p>
+      <!-- Citations -->
+      <div v-if="citations.length && !loading" class="section-stack">
+        <p class="section-label">引用依据</p>
+        <div v-for="item in citations" :key="`${item.source_type}-${item.source_id}`" class="info-card">
+          <p class="info-title">{{ item.title }}</p>
+          <p class="info-body">{{ item.snippet }}</p>
         </div>
       </div>
 
-      <div v-if="extractedConstraints.length && lastResponseType !== 'greeting'" class="assistant-section">
-        <div class="assistant-section-title">已识别条件</div>
-        <div class="assistant-tags">
-          <el-tag v-for="item in extractedConstraints" :key="item" type="info">{{ item }}</el-tag>
+      <!-- Pending action -->
+      <div v-if="pendingAction && !loading" class="section-stack">
+        <p class="section-label">待确认操作</p>
+        <div class="info-card">
+          <p class="info-title">{{ pendingAction.summary }}</p>
+          <p class="info-body">回复"确认"执行，或回复"取消"放弃。</p>
         </div>
       </div>
 
-      <div v-if="recommendations.length" class="assistant-section">
-        <div class="assistant-section-title">推荐结果</div>
-        <div v-for="item in recommendations" :key="`${item.source_type}-${item.dish_id ?? item.merchant_id}`" class="assistant-card">
-          <div class="assistant-card-title">{{ item.dish_name || item.merchant_name }}</div>
-          <div class="assistant-card-subtitle">{{ item.merchant_name }}</div>
-          <div v-if="item.price !== null && item.price !== undefined" class="assistant-card-meta">¥{{ item.price }}</div>
-          <div class="assistant-card-body">{{ item.reason }}</div>
+      <!-- Executed actions -->
+      <div v-if="executedActions.length && !loading" class="section-stack">
+        <p class="section-label">已完成操作</p>
+        <div v-for="item in executedActions" :key="`${item.type}-${item.message}`" class="info-card">
+          <p class="info-title">{{ item.message }}</p>
+          <p class="info-body">{{ item.success ? '操作成功' : '操作失败' }}</p>
         </div>
       </div>
 
-      <div v-if="comparisons.length" class="assistant-section">
-        <div class="assistant-section-title">对比结果</div>
-        <div v-for="item in comparisons" :key="item.merchant_id" class="assistant-card">
-          <div class="assistant-card-title">{{ item.merchant_name }}</div>
-          <div class="assistant-card-body">{{ item.summary }}</div>
+      <!-- Suggested actions -->
+      <div v-if="suggestedActions.length && !loading" class="section-stack">
+        <div class="chip-row">
+          <span v-for="s in suggestedActions" :key="s" class="chip chip--orange" @click="fillDraft(s)">{{ s }}</span>
         </div>
       </div>
 
-      <div v-if="citations.length" class="assistant-section">
-        <div class="assistant-section-title">引用依据</div>
-        <div v-for="item in citations" :key="`${item.source_type}-${item.source_id}`" class="assistant-citation">
-          <div class="assistant-citation-title">{{ item.title }}</div>
-          <div class="assistant-citation-body">{{ item.snippet }}</div>
-        </div>
+      <!-- Error -->
+      <div v-if="errorMessage" class="error-text">{{ errorMessage }}</div>
+    </div>
+
+    <!-- Composer -->
+    <div class="composer">
+      <div class="composer-input-wrap">
+        <input
+          v-model="draft"
+          placeholder="问问 AI 助手..."
+          @keyup.enter="submit"
+        />
       </div>
-
-      <div v-if="pendingAction" class="assistant-section">
-        <div class="assistant-section-title">待确认操作</div>
-        <div class="assistant-card">
-          <div class="assistant-card-title">{{ pendingAction.summary }}</div>
-          <div class="assistant-card-body">回复“确认”执行，或回复“取消”放弃。</div>
-        </div>
-      </div>
-
-      <div v-if="executedActions.length" class="assistant-section">
-        <div class="assistant-section-title">已完成操作</div>
-        <div v-for="item in executedActions" :key="`${item.type}-${item.message}`" class="assistant-card">
-          <div class="assistant-card-title">{{ item.message }}</div>
-          <div class="assistant-card-body">{{ item.success ? '操作成功' : '操作失败' }}</div>
-        </div>
-      </div>
-
-      <div v-if="suggestedActions.length" class="assistant-section">
-        <div class="assistant-section-title">建议操作</div>
-        <div class="assistant-tags">
-          <el-tag v-for="item in suggestedActions" :key="item">{{ item }}</el-tag>
-        </div>
-      </div>
-
-      <div v-if="errorMessage" class="assistant-error">{{ errorMessage }}</div>
-    </el-scrollbar>
-
-    <div class="assistant-composer">
-      <el-input v-model="draft" placeholder="输入问题…" />
-      <el-button type="primary" @click="submit">{{ loading ? '发送中' : '发送' }}</el-button>
+      <button class="send-btn" :disabled="loading || !draft.trim()" @click="submit">➤</button>
     </div>
   </aside>
 </template>
 
 <script setup>
+import { nextTick, ref, watch } from 'vue'
 import { useAssistant } from '../../composables/useAssistant'
+import SoPrice from '../shared/SoPrice.vue'
 
 const {
   draft,
@@ -117,136 +134,300 @@ const {
   executedActions,
   submit,
 } = useAssistant()
+
+const props = defineProps({
+  initialOpen: { type: Boolean, default: false },
+})
+
+const panelOpen = ref(props.initialOpen)
+const scrollArea = ref(null)
+
+const REC_PALETTE = [
+  { glyph: '🍜', bg: 'linear-gradient(135deg,#fff3e0,#ffe0b2)' },
+  { glyph: '🍛', bg: 'linear-gradient(135deg,#fff8e1,#ffecb3)' },
+  { glyph: '🍲', bg: 'linear-gradient(135deg,#fce4ec,#f8bbd0)' },
+  { glyph: '🍱', bg: 'linear-gradient(135deg,#e8f5e9,#c8e6c9)' },
+  { glyph: '🥘', bg: 'linear-gradient(135deg,#fff3e0,#ffccbc)' },
+]
+
+const recGlyph = (item) => REC_PALETTE[((item.dish_id || 0) % REC_PALETTE.length)].glyph
+const recBg = (item) => REC_PALETTE[((item.dish_id || 0) % REC_PALETTE.length)].bg
+
+const fillDraft = (text) => {
+  draft.value = text
+}
+
+watch(messages, () => {
+  nextTick(() => {
+    if (scrollArea.value) scrollArea.value.scrollTop = scrollArea.value.scrollHeight
+  })
+}, { deep: true })
 </script>
 
 <style scoped>
+/* Launcher */
+.launcher {
+  position: fixed;
+  right: 32px;
+  bottom: 32px;
+  z-index: 800;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, var(--so-yellow), var(--so-gold));
+  box-shadow: 0 4px 16px rgba(255, 209, 0, 0.4);
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.launcher:hover { transform: scale(1.08); }
+
+.launcher-icon {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--so-ink-1);
+}
+
+/* Panel */
 .assistant-panel {
   position: fixed;
   right: 32px;
-  bottom: 24px;
-  width: 380px;
+  bottom: 32px;
+  z-index: 800;
+  width: 400px;
   height: 640px;
-  max-height: calc(100vh - 48px);
+  max-height: calc(100vh - 80px);
+  background: var(--so-surface);
+  border-radius: var(--so-r-lg);
+  box-shadow: var(--so-shadow-float);
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px;
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.95);
-  box-shadow: 0 18px 40px rgba(50, 82, 136, 0.18);
-  backdrop-filter: blur(14px);
+  overflow: hidden;
+  animation: mt-slide-up 0.25s ease-out;
+  font-family: var(--so-font-sans);
 }
 
-.assistant-header {
+/* Header */
+.panel-header {
+  padding: 14px 18px;
+  background: linear-gradient(135deg, var(--so-yellow), var(--so-gold));
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-weight: 600;
 }
 
-.status {
-  color: #5b82ff;
-  font-size: 13px;
+.header-left { display: flex; align-items: center; gap: 10px; }
+
+.ai-avatar-sm {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--so-ink-1); color: var(--so-yellow);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; font-weight: 800;
 }
 
-.assistant-scroll {
+.header-title { margin: 0; font-size: 14px; font-weight: 700; color: var(--so-ink-1); }
+.header-sub { margin: 2px 0 0; font-size: 11px; color: rgba(0, 0, 0, 0.55); }
+
+.header-close {
+  background: rgba(0, 0, 0, 0.08); border: none; cursor: pointer;
+  width: 28px; height: 28px; border-radius: 50%;
+  color: var(--so-ink-1); font-size: 16px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+
+/* Messages area */
+.panel-messages {
   flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.assistant-message-row {
+  overflow-y: auto;
+  padding: 16px;
+  background: var(--so-page);
   display: flex;
-  gap: 12px;
-  margin-bottom: 12px;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.assistant-message-row--user {
-  flex-direction: row-reverse;
+/* Bubbles */
+.bubble-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
 }
 
-.assistant-avatar {
+.bubble-row.user { flex-direction: row-reverse; }
+
+.bubble-avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800;
+}
+
+.bubble-avatar.assistant { background: var(--so-ink-1); color: var(--so-yellow); }
+.bubble-avatar.user { background: var(--so-ink-2); color: #fff; }
+
+.bubble {
+  max-width: 78%;
+  padding: 10px 14px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  white-space: pre-line;
+  color: var(--so-ink-1);
+}
+
+.bubble.assistant {
+  background: var(--so-surface);
+  border-radius: 4px 16px 16px 16px;
+}
+
+.bubble.user {
+  background: var(--so-yellow);
+  border-radius: 16px 4px 16px 16px;
+}
+
+/* Thinking */
+.thinking {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--so-ink-4);
+}
+
+.thinking-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  border: 2px solid var(--so-ink-4);
+  border-top-color: transparent;
+  animation: mt-spin 0.8s linear infinite;
+}
+
+/* Section stacks */
+.section-stack {
+  margin-left: 36px;
+  margin-bottom: 4px;
+}
+
+.section-label {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--so-ink-4);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+/* Chips */
+.chip-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--so-r-pill);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.chip--warm {
+  background: var(--so-yellow-soft);
+  color: #866a00;
+}
+
+.chip--orange {
+  background: var(--so-orange-soft);
+  color: var(--so-orange);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.chip--orange:hover { background: #ffe0d5; }
+
+/* Recommendation card */
+.rec-card {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  background: var(--so-surface);
+  border-radius: var(--so-r-md);
+  border: 1px solid var(--so-border-1);
+  margin-bottom: 8px;
+}
+
+.rec-thumb {
+  width: 56px; height: 56px; border-radius: var(--so-r-sm);
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 28px;
+}
+
+.rec-body { flex: 1; min-width: 0; }
+.rec-name { margin: 0; font-size: 13px; font-weight: 700; color: var(--so-ink-1); }
+.rec-merchant { margin: 2px 0; font-size: 11px; color: var(--so-ink-4); }
+.rec-reason { margin: 0 0 4px; font-size: 11px; color: var(--so-ink-3); line-height: 1.4; }
+.rec-footer { display: flex; align-items: center; justify-content: space-between; }
+
+/* Info card (comparisons, citations, actions) */
+.info-card {
+  padding: 10px 12px;
+  border-radius: var(--so-r-sm);
+  background: var(--so-surface);
+  border: 1px solid var(--so-border-1);
+  margin-bottom: 6px;
+}
+
+.info-title { margin: 0; font-size: 13px; font-weight: 600; color: var(--so-ink-1); }
+.info-body { margin: 3px 0 0; font-size: 12px; color: var(--so-ink-3); line-height: 1.45; }
+
+.error-text { font-size: 12px; color: var(--so-red); margin-left: 36px; }
+
+/* Composer */
+.composer {
+  padding: 12px 16px;
+  background: var(--so-surface);
+  border-top: 1px solid var(--so-border-1);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.composer-input-wrap {
+  flex: 1;
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #7196ff, #90d3ff);
-  color: #fff;
-  font-weight: 700;
-  flex-shrink: 0;
+  padding: 0 14px;
+  height: 38px;
+  background: var(--so-page);
+  border-radius: var(--so-r-pill);
 }
 
-.assistant-bubble {
+.composer-input-wrap input {
   flex: 1;
-  padding: 14px 16px;
-  border-radius: 18px;
-  background: #f4f8ff;
-  color: #32445f;
-}
-
-.assistant-bubble p {
-  margin: 0;
-}
-
-.assistant-message-text {
-  white-space: pre-line;
-}
-
-.assistant-section {
-  margin-top: 12px;
-}
-
-.assistant-section-title {
-  margin-bottom: 8px;
-  color: #5a6f91;
+  height: 32px;
+  background: transparent;
+  border: none;
+  outline: none;
   font-size: 13px;
-  font-weight: 600;
+  color: var(--so-ink-1);
+  font-family: var(--so-font-sans);
 }
 
-.assistant-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+.send-btn {
+  width: 38px; height: 38px; border-radius: 50%;
+  background: var(--so-orange); color: #fff;
+  border: none;
+  font-size: 16px; font-weight: 700;
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: background 0.15s;
 }
 
-.assistant-card,
-.assistant-citation {
-  padding: 12px;
-  border-radius: 16px;
-  background: #f7f9fc;
-}
-
-.assistant-card + .assistant-card,
-.assistant-citation + .assistant-citation {
-  margin-top: 8px;
-}
-
-.assistant-card-title,
-.assistant-citation-title {
-  font-weight: 600;
-  color: #24364d;
-}
-
-.assistant-card-subtitle,
-.assistant-card-meta,
-.assistant-citation-body,
-.assistant-card-body {
-  margin-top: 4px;
-  color: #53657d;
-  font-size: 13px;
-}
-
-.assistant-error {
-  color: #d14343;
-  font-size: 13px;
-}
-
-.assistant-composer {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 10px;
+.send-btn:disabled {
+  background: var(--so-ink-5);
+  cursor: not-allowed;
 }
 </style>
-
