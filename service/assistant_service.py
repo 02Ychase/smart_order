@@ -72,7 +72,7 @@ class AssistantService:
         self._ensure_graph()
         state, config = self._build_invoke_input(request, session_id)
         result = self._graph.invoke(state, config=config)
-        self._save_conversation(session_id, request.message, result)
+        self._save_conversation(session_id, request.message, result) 
         return result["response_payload"]
 
     async def async_chat(self, request: AssistantChatRequest) -> AssistantChatResponse:

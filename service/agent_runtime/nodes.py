@@ -38,12 +38,14 @@ def _reset_input_guardrail():
 def input_guardrail_node(state: dict) -> dict:
     from service.config import get_config
 
+    # 如果 guardrail 关闭了，就直接放行，避免不必要的计算
     if not get_config().guardrails.enable_input_guardrail:
         return {"guardrail_blocked": False}
 
     guardrail = _get_input_guardrail()
     # 取出最新的用户信息进行校验
     user_message = latest_user_message(state)
+    # 检查用户问题是否超出长度，是否存在prompt注入
     result = guardrail.check(user_message)
 
     if not result.allowed:
