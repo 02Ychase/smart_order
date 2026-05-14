@@ -11,8 +11,13 @@
       <svg class="location-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M12 2.5c-3.3 0-6 2.6-6 5.9 0 4.4 6 12.9 6 12.9s6-8.5 6-12.9c0-3.3-2.7-5.9-6-5.9Zm0 8.1a2.2 2.2 0 1 1 0-4.4 2.2 2.2 0 0 1 0 4.4Z" />
       </svg>
-      <span class="city">上海</span>
-      <span class="district">· 徐汇区宛平南路 100 ...</span>
+      <template v-if="defaultAddress">
+        <span class="city">{{ defaultAddress.city || '上海' }}</span>
+        <span class="district">· {{ defaultAddress.district }}{{ defaultAddress.address }}</span>
+      </template>
+      <template v-else>
+        <span class="city">选择地址</span>
+      </template>
       <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true">
         <path d="m7 9 5 5 5-5" />
       </svg>
@@ -55,6 +60,10 @@ import { useCart } from '../../composables/useCart'
 
 const props = defineProps({
   currentUser: {
+    type: Object,
+    default: null,
+  },
+  defaultAddress: {
     type: Object,
     default: null,
   },

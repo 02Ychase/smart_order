@@ -1,8 +1,9 @@
-import { ref } from 'vue'
-import { login, register } from '../api/auth'
+import { onMounted, ref } from 'vue'
+import { getCurrentUser, login, register } from '../api/auth'
 
 const currentUser = ref(null)
 const authLoading = ref(false)
+const authInitialized = ref(false)
 
 const applySession = (result) => {
   window.localStorage.setItem('smart_order_access_token', result.access_token)
@@ -11,7 +12,31 @@ const applySession = (result) => {
   return result
 }
 
+const restoreSession = async () => {
+  const token = window.localStorage.getItem('smart_order_access_token')
+  if (!token) {
+    authInitialized.value = true
+    return
+  }
+  try {
+    const user = await getCurrentUser()
+    currentUser.value = user
+  } catch {
+    window.localStorage.removeItem('smart_order_access_token')
+    window.localStorage.removeItem('smart_order_refresh_token')
+    currentUser.value = null
+  } finally {
+    authInitialized.value = true
+  }
+}
+
 export function useAuth() {
+  onMounted(() => {
+    if (!authInitialized.value) {
+      restoreSession()
+    }
+  })
+
   const loginWithPassword = async (payload) => {
     authLoading.value = true
     try {
@@ -38,5 +63,5 @@ export function useAuth() {
     currentUser.value = null
   }
 
-  return { currentUser, authLoading, loginWithPassword, registerWithPassword, logout }
+  return { currentUser, authLoading, authInitialized, loginWithPassword, registerWithPassword, logout }
 }

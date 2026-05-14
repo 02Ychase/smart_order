@@ -2,12 +2,13 @@
   <div class="homepage-shell">
     <HomeHeader
       :current-user="currentUser"
+      :default-address="defaultAddress"
       @open-login="loginOpen = true"
-      @open-cart="cartOpen = true"
-      @open-address="addressOpen = true"
-      @open-orders="ordersOpen = true"
+      @open-cart="requireLogin(() => cartOpen = true)"
+      @open-address="requireLogin(() => addressOpen = true)"
+      @open-orders="requireLogin(() => ordersOpen = true)"
       @open-profile="profileOpen = true"
-      @open-favorites="favoritesOpen = true"
+      @open-favorites="requireLogin(() => favoritesOpen = true)"
       @search="handleSearch"
     />
     <div class="homepage-container mt-scroll">
@@ -49,7 +50,7 @@
         <span class="flash-label">⚡ 限时秒杀</span>
         <span class="flash-countdown">距结束 <strong>02 : 14 : 36</strong></span>
         <div class="flash-spacer"></div>
-        <button v-for="dish in flashDishes" :key="dish.id" class="flash-dish" type="button" @click="cartOpen = true">
+        <button v-for="dish in flashDishes" :key="dish.id" class="flash-dish" type="button" @click="requireLogin(() => cartOpen = true)">
           <span class="flash-thumb" :style="{ background: dish.bg }">{{ dish.glyph }}</span>
           <span class="flash-info">
             <span class="flash-name">{{ dish.name }}</span>
@@ -89,7 +90,7 @@
       <OrderDetailView :order-id="selectedOrderId" @reorder-done="onReorderDone" />
     </el-dialog>
     <el-dialog v-model="profileOpen" width="480px" destroy-on-close>
-      <ProfileView />
+      <ProfileView @logout="handleLogout" />
     </el-dialog>
     <el-dialog v-model="favoritesOpen" width="520px" destroy-on-close>
       <FavoriteView @select-merchant="openMerchantFromFavorites" />
@@ -109,8 +110,9 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { listAddresses } from './api/address'
 import CategoryFilterBar from './components/home/CategoryFilterBar.vue'
 import FloatingAssistant from './components/home/FloatingAssistant.vue'
 import HomeHeader from './components/home/HomeHeader.vue'
@@ -139,10 +141,26 @@ const searchOpen = ref(false)
 const searchKeyword = ref('')
 const profileOpen = ref(false)
 const favoritesOpen = ref(false)
-const { currentUser } = useAuth()
+const { currentUser, logout } = useAuth()
 const { refreshCart } = useCart()
 const activeBannerIndex = ref(0)
+const defaultAddress = ref(null)
 let bannerTimer
+
+const loadDefaultAddress = async () => {
+  if (!currentUser.value) {
+    defaultAddress.value = null
+    return
+  }
+  try {
+    const addresses = await listAddresses()
+    defaultAddress.value = addresses.find((a) => a.is_default) || addresses[0] || null
+  } catch {
+    defaultAddress.value = null
+  }
+}
+
+watch(currentUser, loadDefaultAddress, { immediate: true })
 
 const promoBanners = [
   {
@@ -248,6 +266,19 @@ const onReorderDone = () => {
 const openMerchantFromFavorites = (merchantId) => {
   favoritesOpen.value = false
   openMerchantDrawer(merchantId)
+}
+
+const handleLogout = () => {
+  logout()
+  profileOpen.value = false
+}
+
+const requireLogin = (action) => {
+  if (!currentUser.value) {
+    loginOpen.value = true
+    return
+  }
+  action()
 }
 
 onMounted(() => {
