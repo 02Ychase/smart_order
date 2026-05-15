@@ -84,8 +84,14 @@ class AssistantService:
         return result["response_payload"]
 
 
+_health_vector_store: AssistantVectorStore | None = None
+
+
 def build_assistant_health() -> AssistantHealthResponse:
-    vector_store_ready = AssistantVectorStore().is_ready()
+    global _health_vector_store
+    if _health_vector_store is None:
+        _health_vector_store = AssistantVectorStore(auto_create_index=False)
+    vector_store_ready = _health_vector_store.is_ready()
     llm_ready = bool(os.getenv("MODEL_NAME"))
     return {
         "status": "ok",

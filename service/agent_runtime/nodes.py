@@ -226,10 +226,11 @@ def route_after_evaluate(state: dict) -> str:
 
 
 def rag_node(state: dict, retriever: AdvancedRagRetriever) -> dict:
+    plan = state["current_plan"]
     user_message = latest_user_message(state)
     evidence = retriever.retrieve(
         user_message,
-        agent_plan=state["current_plan"],
+        agent_plan=plan,
         memories=state.get("loaded_user_memories", []),
         limit=3,
     )
@@ -246,7 +247,20 @@ def rag_node(state: dict, retriever: AdvancedRagRetriever) -> dict:
         }
         for item in evidence
     ]
-    return {"recent_evidence": serialized}
+
+    # Mark RAG tool calls as completed to prevent re-execution loops
+    existing_results = list(state.get("tool_results", []))
+    completed = {r.get("type", "") for r in existing_results}
+    for call in plan.tool_calls:
+        if call.tool_name in RAG_TOOL_NAMES and call.tool_name not in completed:
+            existing_results.append({
+                "type": call.tool_name,
+                "success": True,
+                "message": f"检索到 {len(serialized)} 条结果",
+                "data": {},
+            })
+
+    return {"recent_evidence": serialized, "tool_results": existing_results}
 
 
 class LocalActionExecutor:
@@ -265,10 +279,18 @@ class LocalActionExecutor:
 
         user_id = state.get("user_id")
         session_id = state.get("session_id")
+        completed_tools = {r.get("type", "") for r in state.get("tool_results", [])}
         call = next(
-            (item for item in plan.tool_calls if item.tool_name in ACTION_TOOL_NAMES),
-            plan.tool_calls[0],
+            (item for item in plan.tool_calls
+             if item.tool_name in ACTION_TOOL_NAMES and item.tool_name not in completed_tools),
+            None,
         )
+        if call is None:
+            return {
+                "success": False,
+                "message": "没有待执行的操作",
+                "undo_available": False,
+            }
         if call.tool_name == "cart_clear":
             result = clear_cart_tool(user_id=user_id, session=self.session)
             journal = ActionJournalService(self.session).record_completed_action(
@@ -423,12 +445,27 @@ class LocalActionExecutor:
 
 def action_node(state: dict, action_executor=None) -> dict:
     executor = action_executor or LocalActionExecutor()
-    result = executor.execute_action(state["current_plan"], state)
+    plan = state["current_plan"]
+
+    # Determine which action tool will be executed next
+    completed_tools = {r.get("type", "") for r in state.get("tool_results", [])}
+    executed_tool_name = next(
+        (c.tool_name for c in plan.tool_calls
+         if c.tool_name in ACTION_TOOL_NAMES and c.tool_name not in completed_tools),
+        "",
+    )
+
+    result = executor.execute_action(plan, state)
+
+    # Accumulate tool_results instead of replacing
+    existing_results = list(state.get("tool_results", []))
+    existing_results.append(_normalize_tool_result(result, state, executed_tool_name))
+
     recent_ids = list(state.get("recent_action_ids", []))
     if result.get("action_id"):
         recent_ids.append(result["action_id"])
     return {
-        "tool_results": [_normalize_tool_result(result, state)],
+        "tool_results": existing_results,
         "recent_action_ids": recent_ids,
     }
 
@@ -436,14 +473,17 @@ def action_node(state: dict, action_executor=None) -> dict:
 def undo_node(state: dict, action_executor=None) -> dict:
     executor = action_executor or LocalActionExecutor()
     result = executor.undo_last(state)
-    return {"tool_results": [_normalize_tool_result(result, state)]}
+    existing_results = list(state.get("tool_results", []))
+    existing_results.append(_normalize_tool_result(result, state, "undo_last_action"))
+    return {"tool_results": existing_results}
 
 
-def _normalize_tool_result(result: dict, state: dict) -> dict:
-    plan = state.get("current_plan")
-    tool_name = ""
-    if plan and plan.tool_calls:
-        tool_name = plan.tool_calls[0].tool_name
+def _normalize_tool_result(result: dict, state: dict, executed_tool_name: str = "") -> dict:
+    tool_name = executed_tool_name
+    if not tool_name:
+        plan = state.get("current_plan")
+        if plan and plan.tool_calls:
+            tool_name = plan.tool_calls[0].tool_name
     data = dict(result.get("data") or {})
     for key in ("action_id", "undo_available"):
         if key in result:

@@ -132,6 +132,10 @@ class BusinessRecallRoute:
         self.catalog_service = catalog_service
 
     def recall(self, plan: RagQueryPlan, limit: int) -> list[RecallCandidate]:
+        # Skip dish recommendations when only merchant data is requested
+        if plan.source_types and "dish" not in plan.source_types:
+            return []
+
         candidates = []
         dishes = self.catalog_service.list_recommended_dishes(limit=max(limit, 30))
 

@@ -99,12 +99,6 @@ class AssistantStreamService:
             from service.config import get_config
             import os
 
-            if get_config().guardrails.enable_output_guardrail:
-                recommendations, _ = _build_structured_data(evidence)
-                async for token in self._stream_text(_template_recommendation(recommendations)):
-                    yield token
-                return
-
             model_name = os.getenv("MODEL_NAME")
             if not model_name:
                 raise ValueError("MODEL_NAME not configured")
@@ -112,15 +106,39 @@ class AssistantStreamService:
             evidence_text = _format_evidence_for_llm(evidence)
             system_prompt = PromptRegistry().load("agent.answer_grounded")
             prompt = f"用户消息：{user_message}\n意图：{response_type}\n\n检索到的证据：\n{evidence_text}\n\n请基于证据生成自然回复。"
-            chain = ChatPromptTemplate.from_messages([
-                ("system", "{system_instruction}"),
-                ("human", "{query}"),
-            ]) | init_chat_model(model=model_name, model_provider="openai")
 
-            async for chunk in chain.astream({"system_instruction": system_prompt, "query": prompt}):
-                content = getattr(chunk, "content", "")
-                if content:
-                    yield content
+            if get_config().guardrails.enable_output_guardrail:
+                # Match regular chat behavior: generate full LLM response first,
+                # then check guardrail, fall back to template only if it fails.
+                chain = ChatPromptTemplate.from_messages([
+                    ("system", "{system_instruction}"),
+                    ("human", "{query}"),
+                ]) | init_chat_model(model=model_name, model_provider="openai")
+
+                result = await asyncio.to_thread(
+                    chain.invoke, {"system_instruction": system_prompt, "query": prompt}
+                )
+                llm_response = getattr(result, "content", str(result))
+
+                from service.guardrails import OutputGuardrail
+                output_result = OutputGuardrail().check(llm_response, evidence)
+                if not output_result.allowed:
+                    recommendations, _ = _build_structured_data(evidence)
+                    llm_response = _template_recommendation(recommendations)
+
+                async for token in self._stream_text(llm_response):
+                    yield token
+            else:
+                # Stream LLM tokens directly when guardrail is disabled
+                chain = ChatPromptTemplate.from_messages([
+                    ("system", "{system_instruction}"),
+                    ("human", "{query}"),
+                ]) | init_chat_model(model=model_name, model_provider="openai")
+
+                async for chunk in chain.astream({"system_instruction": system_prompt, "query": prompt}):
+                    content = getattr(chunk, "content", "")
+                    if content:
+                        yield content
         except Exception:
             from service.agent_runtime.nodes import _build_structured_data, _template_recommendation
 

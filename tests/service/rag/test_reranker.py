@@ -229,11 +229,11 @@ def test_text_overlaps_embedding_low_similarity(monkeypatch) -> None:
     assert result is False
 
 
-def test_text_overlaps_embedding_no_api_key_returns_false(monkeypatch) -> None:
+def test_text_overlaps_embedding_no_api_key_returns_none(monkeypatch) -> None:
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
     cache_clear()
     result = _text_overlaps_embedding("anything", "anything else")
-    assert result is False
+    assert result is None
 
 
 # ── Unified _text_overlaps mode switching ────────────────────────────────────
@@ -250,6 +250,18 @@ def test_text_overlaps_uses_embedding_mode_by_default(monkeypatch) -> None:
     assert result is True
     mock_emb.assert_called_once()
     mock_leg.assert_not_called()
+
+
+def test_text_overlaps_falls_back_to_keyword_when_embedding_unavailable(monkeypatch) -> None:
+    monkeypatch.setenv("USER_PREF_MATCH_MODE", "embedding")
+    cache_clear()
+
+    with patch("service.rag.reranker._text_overlaps_embedding", return_value=None) as mock_emb:
+        with patch("service.rag.reranker._text_overlaps_legacy", return_value=True) as mock_leg:
+            result = _text_overlaps("content", "candidate text")
+    assert result is True
+    mock_emb.assert_called_once()
+    mock_leg.assert_called_once()
 
 
 def test_text_overlaps_uses_legacy_when_configured(monkeypatch) -> None:

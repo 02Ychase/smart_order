@@ -213,21 +213,32 @@ def _text_overlaps_legacy(memory_content: str, candidate_text: str) -> bool:
     return False
 
 
-def _text_overlaps_embedding(memory_content: str, candidate_text: str) -> bool:
-    """Check semantic overlap using embedding cosine similarity."""
+def _text_overlaps_embedding(memory_content: str, candidate_text: str) -> bool | None:
+    """Check semantic overlap using embedding cosine similarity.
+
+    Returns None when embedding is unavailable (API key missing, service error),
+    allowing the caller to fall back to keyword matching.
+    """
     mem_emb = _get_embedding_cached(memory_content)
     cand_emb = _get_embedding_cached(candidate_text)
     if mem_emb is None or cand_emb is None:
-        return False
+        return None
     sim = cosine_similarity(list(mem_emb), list(cand_emb))
     return sim >= _EMBEDDING_SIMILARITY_THRESHOLD
 
 
 def _text_overlaps(memory_content: str, candidate_text: str) -> bool:
     """Unified entry point for text overlap detection.
-    
-    Uses embedding-based similarity by default with keyword matching as fallback.
+
+    Uses embedding-based similarity by default. Falls back to keyword matching
+    when embedding is unavailable (e.g., DASHSCOPE_API_KEY not set).
+    Mode is read per-call so runtime/test env var changes take effect.
     """
-    if _EMBEDDING_MODE == "legacy":
+    mode = os.getenv("USER_PREF_MATCH_MODE", "embedding")
+    if mode == "legacy":
         return _text_overlaps_legacy(memory_content, candidate_text)
-    return _text_overlaps_embedding(memory_content, candidate_text)
+    result = _text_overlaps_embedding(memory_content, candidate_text)
+    if result is not None:
+        return result
+    # Fallback to keyword matching when embedding is unavailable
+    return _text_overlaps_legacy(memory_content, candidate_text)
