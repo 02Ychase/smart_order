@@ -13,11 +13,14 @@ def apply_hard_filters(candidates: list[FusedCandidate], plan: RagQueryPlan) -> 
     forbidden_keywords = filters.get("forbidden_keywords") or []
     budget_max = filters.get("budget_max")
     party_size = int(filters.get("party_size") or 1)
+    allowed_source_types = set(plan.source_types) if plan.source_types else None
 
     kept = []
     for candidate in candidates:
         facts = candidate.facts
         text = _candidate_text(candidate)
+        if allowed_source_types and candidate.source_type not in allowed_source_types:
+            continue
         if require_available and facts.get("is_available") is not True:
             continue
         if exclude_allergens:

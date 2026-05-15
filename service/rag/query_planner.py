@@ -120,14 +120,16 @@ def _apply_memory_hints(
                     preferred_merchants.append(merchant)
 
     # Also extract dish/merchant preferences from food_preference memories
-    # as they may contain specific dish/merchant mentions
+    # as they may contain specific dish/merchant mentions.
+    # Filter out cuisine/flavor descriptions (e.g., "辣的川菜") that are not
+    # specific dish names.
     for mem in memories:
         memory_type = mem.get("memory_type", "")
         content = str(mem.get("content", ""))
         if memory_type == "food_preference" and content:
             dishes = _extract_dish_preferences(content)
             for dish in dishes:
-                if dish not in preferred_dishes:
+                if dish not in preferred_dishes and not _is_cuisine_description(dish):
                     preferred_dishes.append(dish)
             merchants = _extract_merchant_preferences(content)
             for merchant in merchants:
@@ -135,20 +137,43 @@ def _apply_memory_hints(
                     preferred_merchants.append(merchant)
 
 
+_CUISINE_KEYWORDS = frozenset({
+    "湘菜", "川菜", "粤菜", "鲁菜", "苏菜", "闽菜", "浙菜", "徽菜", "东北菜",
+    "日料", "韩料", "西餐", "火锅", "烧烤", "甜品", "小吃", "中餐",
+})
+
+
+def _is_cuisine_description(text: str) -> bool:
+    """Check if text is a cuisine/flavor description rather than a specific dish name."""
+    for kw in _CUISINE_KEYWORDS:
+        if text.endswith(kw) and text != kw:
+            return True
+    return False
+
+
 def _extract_dish_preferences(content: str) -> list[str]:
     """Extract dish names from memory content."""
     dishes: list[str] = []
     patterns = [
-        r"喜欢(.+?)(?:，|。|,|$)",
+        r"喜欢(?:吃)?(.+?)(?:，|。|,|$)",
         r"爱吃(.+?)(?:，|。|,|$)",
         r"经常点(.+?)(?:，|。|,|$)",
+        r"偶尔点(.+?)(?:，|。|,|$)",
         r"推荐(.+?)(?:，|。|,|$)",
         r"想?(?:吃|要)(.+?)(?:，|。|,|$)",
     ]
     for pattern in patterns:
         matches = re.findall(pattern, content)
         dishes.extend(matches)
-    return [d.strip() for d in dishes if d.strip()]
+    # Split compound dish names joined by connectors
+    split_dishes: list[str] = []
+    for d in dishes:
+        d = d.strip()
+        if not d:
+            continue
+        parts = re.split(r"[和、]|以及|还有", d)
+        split_dishes.extend(p.strip() for p in parts if p.strip())
+    return split_dishes
 
 
 def _extract_merchant_preferences(content: str) -> list[str]:

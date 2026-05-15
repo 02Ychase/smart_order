@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 class AssistantVectorStore:
-    def __init__(self) -> None:
+    def __init__(self, auto_create_index: bool = True) -> None:
         self.api_key = os.getenv("PINECONE_API_KEY")
         self.index_name = os.getenv("PINECONE_ASSISTANT_INDEX", "smart-order-assistant")
         self.dashscope_api_key = os.getenv("DASHSCOPE_API_KEY")
@@ -23,7 +23,10 @@ class AssistantVectorStore:
         if self.api_key:
             try:
                 self._client = Pinecone(api_key=self.api_key)
-                if not self._client.has_index(self.index_name):
+                if self._client.has_index(self.index_name):
+                    self._index = self._client.Index(self.index_name)
+                    logger.info(f"Pinecone index ready: {self.index_name}")
+                elif auto_create_index:
                     logger.info(f"Creating Pinecone index: {self.index_name}")
                     self._client.create_index(
                         name=self.index_name,
@@ -32,8 +35,10 @@ class AssistantVectorStore:
                         metric="cosine",
                         spec=ServerlessSpec(cloud="aws", region=self.pinecone_env),
                     )
-                self._index = self._client.Index(self.index_name)
-                logger.info(f"Pinecone index ready: {self.index_name}")
+                    self._index = self._client.Index(self.index_name)
+                    logger.info(f"Pinecone index ready: {self.index_name}")
+                else:
+                    logger.info(f"Pinecone index '{self.index_name}' not found (auto_create disabled)")
             except Exception as e:
                 logger.warning(f"Failed to initialize Pinecone index: {e}")
 
