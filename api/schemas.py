@@ -243,7 +243,7 @@ class AssistantExecutedActionResponse(BaseModel):
 class AssistantChatResponse(BaseModel):
     session_id: str
     message: str
-    response_type: Literal["greeting", "clarification", "confirmation_required", "action_pending", "action_completed", "recommendation", "comparison", "knowledge", "unsupported"] = "recommendation"
+    response_type: Literal["greeting", "clarification", "confirmation_required", "action_pending", "action_completed", "recommendation", "comparison", "knowledge", "unsupported","guardrail_blocked"] = "recommendation"
     needs_clarification: bool = False
     clarification_question: str | None = None
     extracted_constraints: AssistantConstraintResponse | None = None
