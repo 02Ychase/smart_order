@@ -15,6 +15,7 @@ from service.user_memory_service import UserMemoryService
 
 class AssistantStreamService:
     def __init__(self, session=None):
+        # 数据库ORM Session
         self.session = session
         self._graph = None
 
@@ -24,6 +25,7 @@ class AssistantStreamService:
             self._graph = build_agent_graph(
                 retriever=AdvancedRagRetriever(graph_session),
                 action_executor=LocalActionExecutor(self.session),
+                # 用户记忆service，用于加载用户长期记忆和写入新的记忆
                 memory_service=UserMemoryService(self.session) if graph_session else None,
                 use_llm_response=False,
             )
@@ -34,6 +36,8 @@ class AssistantStreamService:
         session_id = session_id or str(uuid.uuid4())
         self._ensure_graph()
 
+        # 通过session_id获取短期记忆历史消息，并将新消息添加到历史消息中，构建agent的输入状态
+        # 
         history = _conversation_store.get_history(session_id)
         new_message = HumanMessage(content=message)
         messages = history + [new_message]

@@ -30,6 +30,7 @@ class AdvancedRagRetriever:
             self.recall_routes = recall_routes
         else:
             self.recall_routes = [DenseVectorRecallRoute()]
+            # 能访问数据库时启动四路召回
             if catalog_service is not None:
                 self.recall_routes.extend([
                     SparseVectorRecallRoute(catalog_service),
