@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 from repository.user_memory_repository import UserMemoryRepository
+from service.config import get_config
+
+# Safety-critical memory types that must always be loaded in full.
+# If a future "on-demand recall" mechanism is introduced, these types
+# must be exempted and loaded unconditionally to prevent missing
+# allergen / dietary constraints.
+ALWAYS_LOAD_TYPES: frozenset[str] = frozenset({"dietary_constraint"})
 
 
 class UserMemoryService:
@@ -20,7 +27,15 @@ class UserMemoryService:
         }
 
     def list_memories(self, user_id: int) -> list[dict]:
-        return [self._serialize(record) for record in self.repository.list_for_user(user_id)]
+        limit = get_config().memory.max_memories_per_user
+        always_records = self.repository.list_for_user_by_types(user_id, ALWAYS_LOAD_TYPES)
+        remaining_limit = max(0, int(limit) - len(always_records))
+        other_records = self.repository.list_for_user_excluding_types(
+            user_id,
+            ALWAYS_LOAD_TYPES,
+            limit=remaining_limit,
+        )
+        return [self._serialize(record) for record in [*always_records, *other_records]]
 
     def upsert_memory(
         self,

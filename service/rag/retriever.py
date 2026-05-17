@@ -44,21 +44,31 @@ class AdvancedRagRetriever:
         self.reranker = reranker or WeightedReranker()
         self.cross_encoder = cross_encoder or CrossEncoderReranker()
 
-    def retrieve(self, original_query: str, agent_plan: AgentPlan, memories: list[dict] | None = None, limit: int = 5) -> list[RagEvidence]:
+    def retrieve(
+        self,
+        original_query: str,
+        agent_plan: AgentPlan,
+        memories: list[dict] | None = None,
+        limit: int = 5,
+        max_limit: int | None = None,
+    ) -> list[RagEvidence]:
         from service.observability import MetricsCollector
         collector = MetricsCollector()
         collector.set_metadata("query", original_query)
 
+        cfg = get_config().rag
+        effective_max = max_limit if max_limit is not None else cfg.output_limit_max
+
         plan = self.query_planner.plan(original_query, agent_plan, memories or [])
-        cache_key = self._cache_key(plan, memories)
+        output_limit = self._output_limit(plan, default=limit, max_limit=effective_max)
+
+        cache_key = self._cache_key(plan, memories, output_limit)
         cached = self._cache_get(cache_key)
         if cached is not None:
             logger.debug("RAG cache hit: key=%s", cache_key[:32])
             collector.increment("rag.cache_hit")
             collector.emit("rag_retrieve")
             return [self._dict_to_evidence(item) for item in cached]
-
-        output_limit = self._output_limit(plan, default=limit)
 
         with collector.timer("recall"):
             route_results = self._parallel_recall(plan, limit=50)
@@ -98,7 +108,7 @@ class AdvancedRagRetriever:
         self._cache_set(cache_key, serialized)
         return evidence_list
 
-    def _cache_key(self, plan, memories: list[dict] | None = None) -> str:
+    def _cache_key(self, plan, memories: list[dict] | None = None, output_limit: int = 5) -> str:
         must = plan.must_filters or {}
         should = plan.should_filters or {}
         memory_hash = ""
@@ -116,6 +126,8 @@ class AdvancedRagRetriever:
             # structural parameters that change recall / output shape
             ",".join(sorted(plan.source_types)),
             plan.answer_mode or "",
+            # effective output limit (includes caller default + user request + max cap)
+            str(output_limit),
             # must_filters (hard filters)
             ",".join(sorted(must.get("cuisine_types") or [])),
             str(must.get("budget_max") or ""),
@@ -126,7 +138,6 @@ class AdvancedRagRetriever:
             str(must.get("merchant_name") or ""),
             # should_filters (soft filters / ordering)
             ",".join(sorted(should.get("flavor_preferences") or [])),
-            str(should.get("limit") or ""),
             str(should.get("sort_by") or ""),
             str(should.get("price_preference") or ""),
             # preference hints
@@ -197,13 +208,18 @@ class AdvancedRagRetriever:
         )
 
     @staticmethod
-    def _output_limit(plan, default: int) -> int:
+    def _output_limit(plan, default: int, max_limit: int = 20) -> int:
+        """Resolve the effective output limit.
+
+        * User didn't specify a count → return *default*.
+        * User specified a count → honour it, but cap at *max_limit*.
+        """
         raw_limit = (plan.should_filters or {}).get("limit")
         try:
             parsed = int(raw_limit)
         except (TypeError, ValueError):
             return default
-        return max(1, min(parsed, default))
+        return max(1, min(parsed, max_limit))
 
     @staticmethod
     def _apply_result_ordering(candidates: list[FusedCandidate], plan) -> list[FusedCandidate]:

@@ -13,6 +13,7 @@ class AppConfig:
         recall_limit: int = 50
         cross_encoder_top_k: int = 20
         output_limit_default: int = 5
+        output_limit_max: int = 20
         bm25_k1: float = 1.2
         bm25_b: float = 0.75
         intent_weights: dict = field(default_factory=lambda: {
@@ -43,9 +44,14 @@ class AppConfig:
         enable_topic_guardrail: bool = True
         enable_output_guardrail: bool = True
 
+    @dataclass
+    class MemoryConfig:
+        max_memories_per_user: int = 100
+
     rag: RagConfig = field(default_factory=RagConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     guardrails: GuardrailConfig = field(default_factory=GuardrailConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
 
 
 _app_config: AppConfig | None = None

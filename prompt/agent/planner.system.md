@@ -45,7 +45,7 @@
 
 7. upsert_preference
    - 作用：更新用户偏好记忆。可逆写操作。
-   - arguments：{"memory_type": "food_preference | dietary_constraint | merchant_affinity", "content": str}
+   - arguments：{"memory_type": "food_preference | dietary_constraint | merchant_preference | dish_preference", "content": str}
    - writes_database：true
 
 8. undo_last_action

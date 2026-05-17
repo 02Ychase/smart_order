@@ -5,12 +5,36 @@ class InMemoryRepo:
     def __init__(self):
         self.records = []
 
-    def list_for_user(self, user_id):
-        return [
+    def list_for_user(self, user_id, limit=100):
+        results = [
             record
             for record in self.records
             if record["user_id"] == user_id and record["status"] == "active"
         ]
+        return results[:limit]
+
+    def list_for_user_by_types(self, user_id, memory_types):
+        return [
+            record
+            for record in self.records
+            if (
+                record["user_id"] == user_id
+                and record["status"] == "active"
+                and record["memory_type"] in memory_types
+            )
+        ]
+
+    def list_for_user_excluding_types(self, user_id, memory_types, limit=100):
+        results = [
+            record
+            for record in self.records
+            if (
+                record["user_id"] == user_id
+                and record["status"] == "active"
+                and record["memory_type"] not in memory_types
+            )
+        ]
+        return results[:limit]
 
     def upsert(self, user_id, memory_type, content, confidence):
         for record in self.records:

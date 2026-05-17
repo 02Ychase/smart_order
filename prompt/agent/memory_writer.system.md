@@ -4,7 +4,7 @@
 只输出 JSON：
 {
   "memories": [
-    {"memory_type": "food_preference | dietary_constraint | merchant_affinity | response_style", "content": "结构化事实", "confidence": 0.0}
+    {"memory_type": "food_preference | dietary_constraint | merchant_preference | dish_preference", "content": "结构化事实", "confidence": 0.0}
   ]
 }
 

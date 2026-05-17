@@ -113,7 +113,7 @@ def _apply_memory_hints(
             for dish in dishes:
                 if dish not in preferred_dishes:
                     preferred_dishes.append(dish)
-        elif memory_type == "merchant_preference" and content:
+        elif memory_type in {"merchant_preference", "merchant_affinity"} and content:
             merchants = _extract_merchant_preferences(content)
             for merchant in merchants:
                 if merchant not in preferred_merchants:

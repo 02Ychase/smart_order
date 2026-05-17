@@ -38,7 +38,7 @@ class StubRetriever:
     def __init__(self):
         self.called = False
 
-    def retrieve(self, original_query, agent_plan, memories, limit):
+    def retrieve(self, original_query, agent_plan, memories, limit, **kwargs):
         self.called = True
         return [
             type(
@@ -67,7 +67,7 @@ class MerchantRetriever:
     def __init__(self):
         self.called = False
 
-    def retrieve(self, original_query, agent_plan, memories, limit):
+    def retrieve(self, original_query, agent_plan, memories, limit, **kwargs):
         self.called = True
         return [
             type(

@@ -35,7 +35,7 @@ class MultiStepPlanner:
 
 
 class StubRetriever:
-    def retrieve(self, original_query, agent_plan, memories, limit):
+    def retrieve(self, original_query, agent_plan, memories, limit, **kwargs):
         return [
             type("Evidence", (), {
                 "source_type": "dish", "source_id": 11, "merchant_id": 1,

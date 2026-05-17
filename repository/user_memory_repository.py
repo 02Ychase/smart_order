@@ -10,12 +10,44 @@ class UserMemoryRepository:
     def __init__(self, session: Session):
         self.session = session
 
-    def list_for_user(self, user_id: int) -> list[UserMemory]:
+    def list_for_user(self, user_id: int, limit: int = 100) -> list[UserMemory]:
         statement = (
             select(UserMemory)
             .where(UserMemory.user_id == user_id, UserMemory.status == "active")
             .order_by(UserMemory.updated_at.desc(), UserMemory.id.desc())
+            .limit(limit)
         )
+        return list(self.session.scalars(statement))
+
+    def list_for_user_by_types(self, user_id: int, memory_types: set[str] | frozenset[str]) -> list[UserMemory]:
+        if not memory_types:
+            return []
+        statement = (
+            select(UserMemory)
+            .where(
+                UserMemory.user_id == user_id,
+                UserMemory.status == "active",
+                UserMemory.memory_type.in_(list(memory_types)),
+            )
+            .order_by(UserMemory.updated_at.desc(), UserMemory.id.desc())
+        )
+        return list(self.session.scalars(statement))
+
+    def list_for_user_excluding_types(
+        self,
+        user_id: int,
+        memory_types: set[str] | frozenset[str],
+        limit: int = 100,
+    ) -> list[UserMemory]:
+        if limit <= 0:
+            return []
+        statement = (
+            select(UserMemory)
+            .where(UserMemory.user_id == user_id, UserMemory.status == "active")
+        )
+        if memory_types:
+            statement = statement.where(UserMemory.memory_type.not_in(list(memory_types)))
+        statement = statement.order_by(UserMemory.updated_at.desc(), UserMemory.id.desc()).limit(limit)
         return list(self.session.scalars(statement))
 
     def upsert(

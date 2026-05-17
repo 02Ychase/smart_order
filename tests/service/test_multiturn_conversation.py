@@ -98,7 +98,7 @@ class RecordingRetriever:
     def __init__(self):
         self.called_with_query = None
 
-    def retrieve(self, original_query, agent_plan, memories, limit):
+    def retrieve(self, original_query, agent_plan, memories, limit, **kwargs):
         self.called_with_query = original_query
         return []
 
@@ -155,7 +155,7 @@ def test_respond_node_carries_recommendations_in_output() -> None:
     ]
 
     class FixedRetriever:
-        def retrieve(self, q, agent_plan, memories, limit):
+        def retrieve(self, q, agent_plan, memories, limit, **kwargs):
             return retriever_evidence
 
     runtime = AgentRuntimeContext(
@@ -248,7 +248,7 @@ class MultiTurnPlanner:
 
 
 class FixedRetriever:
-    def retrieve(self, q, agent_plan, memories, limit):
+    def retrieve(self, q, agent_plan, memories, limit, **kwargs):
         return [
             type("E", (), {
                 "source_type": "dish", "source_id": 12, "merchant_id": 1,

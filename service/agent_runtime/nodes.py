@@ -297,9 +297,12 @@ def route_after_evaluate(state: dict) -> str:
 
 
 def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
+    from service.config import get_config
+
     runtime = get_runtime(config)
     retriever = (runtime.retriever if runtime else None) or AdvancedRagRetriever()
 
+    rag_cfg = get_config().rag
     plan = state["current_plan"]
     # Use normalized_query from planner (which understands multi-turn context)
     # instead of raw user_message which may be "再来几个" without context.
@@ -308,7 +311,8 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
         effective_query,
         agent_plan=plan,
         memories=state.get("loaded_user_memories", []),
-        limit=3,
+        limit=rag_cfg.output_limit_default,
+        max_limit=rag_cfg.output_limit_max,
     )
     serialized = [
         {
