@@ -26,7 +26,11 @@ def _get_input_guardrail():
     if _input_guardrail is None:
         from service.config import get_config
         from service.guardrails import InputGuardrail
-        _input_guardrail = InputGuardrail(max_length=get_config().guardrails.max_input_length)
+        cfg = get_config().guardrails
+        _input_guardrail = InputGuardrail(
+            max_length=cfg.max_input_length,
+            enable_topic_check=cfg.enable_topic_guardrail,
+        )
     return _input_guardrail
 
 
@@ -43,14 +47,16 @@ def input_guardrail_node(state: dict) -> dict:
         return {"guardrail_blocked": False}
 
     guardrail = _get_input_guardrail()
-    # 取出最新的用户信息进行校验
     user_message = latest_user_message(state)
-    # 检查用户问题是否超出长度，是否存在prompt注入
     result = guardrail.check(user_message)
 
     if not result.allowed:
-        logger.warning("Input guardrail blocked: %s", result.reason)
-        return {"guardrail_blocked": True, "guardrail_reason": result.reason}
+        logger.warning("Input guardrail blocked: category=%s reason=%s", result.category, result.reason)
+        return {
+            "guardrail_blocked": True,
+            "guardrail_reason": result.reason,
+            "guardrail_category": result.category,
+        }
 
     return {"guardrail_blocked": False}
 
@@ -137,11 +143,47 @@ def _format_conversation_for_memory(messages: list) -> str:
     return "\n".join(parts)
 
 
+def _format_recent_turns(messages: list, max_turns: int = 3) -> str:
+    """Format the last *max_turns* complete turns (human+ai pairs) excluding
+    the current (last) human message.
+
+    Returns an empty string when there are no previous turns, so callers can
+    cheaply skip injection when the conversation just started.
+    """
+    # Drop the trailing human message (current turn)
+    history = list(messages)
+    if history and isinstance(history[-1], HumanMessage):
+        history = history[:-1]
+
+    # Walk backwards to collect at most max_turns pairs
+    pairs: list[tuple[str, str]] = []
+    i = len(history) - 1
+    while i >= 1 and len(pairs) < max_turns:
+        ai_msg = history[i]
+        human_msg = history[i - 1]
+        if isinstance(ai_msg, AIMessage) and isinstance(human_msg, HumanMessage):
+            pairs.append((str(human_msg.content), str(ai_msg.content)))
+            i -= 2
+        else:
+            i -= 1
+
+    if not pairs:
+        return ""
+
+    pairs.reverse()
+    lines = []
+    for human, ai in pairs:
+        lines.append(f"用户: {human}")
+        lines.append(f"助手: {ai}")
+    return "\n".join(lines)
+
+
 def plan_node(state: dict, config: RunnableConfig | None = None) -> dict:
     runtime = get_runtime(config)
     planner = (runtime.planner if runtime else None) or _get_default_planner()
 
     user_message = latest_user_message(state)
+    conversation_history = _format_recent_turns(state.get("messages", []), max_turns=3)
     plan = planner.plan(
         user_message,
         {
@@ -152,6 +194,8 @@ def plan_node(state: dict, config: RunnableConfig | None = None) -> dict:
             "iteration_count": state.get("iteration_count", 0),
             "recent_evidence": state.get("recent_evidence", []),
             "tool_results": state.get("tool_results", []),
+            "conversation_history": conversation_history,
+            "last_recommendations": state.get("last_recommendations", []),
         },
     )
     return {"current_plan": plan}
@@ -257,9 +301,11 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
     retriever = (runtime.retriever if runtime else None) or AdvancedRagRetriever()
 
     plan = state["current_plan"]
-    user_message = latest_user_message(state)
+    # Use normalized_query from planner (which understands multi-turn context)
+    # instead of raw user_message which may be "再来几个" without context.
+    effective_query = plan.normalized_query or latest_user_message(state)
     evidence = retriever.retrieve(
-        user_message,
+        effective_query,
         agent_plan=plan,
         memories=state.get("loaded_user_memories", []),
         limit=3,
@@ -533,11 +579,20 @@ def respond_node(state: dict, config: RunnableConfig | None = None) -> dict:
     use_llm = runtime.use_llm_response if runtime else True
     # Handle guardrail-blocked requests
     if state.get("guardrail_blocked"):
-        message = "抱歉，您的请求无法处理。请尝试换一种方式提问。"
+        category = state.get("guardrail_category", "safety")
+        if category == "off_topic":
+            message = (
+                "我是你的智能点餐助手，可以帮你推荐菜品、查找商家信息、"
+                "管理购物车和配送地址。请问有什么点餐相关的需求吗？"
+            )
+            response_type = "off_topic"
+        else:
+            message = "抱歉，您的请求无法处理。请尝试换一种方式提问。"
+            response_type = "guardrail_blocked"
         payload = {
             "session_id": state.get("session_id"),
             "message": message,
-            "response_type": "guardrail_blocked",
+            "response_type": response_type,
             "needs_clarification": False,
             "clarification_question": None,
             "extracted_constraints": None,
@@ -558,20 +613,27 @@ def respond_node(state: dict, config: RunnableConfig | None = None) -> dict:
     evidence = state.get("recent_evidence", [])
     response_type = _external_response_type(plan, state)
     user_message = latest_user_message(state)
+    conversation_history = _format_recent_turns(state.get("messages", []), max_turns=2)
 
     recommendations, citations = _build_structured_data(evidence)
     tool_results = state.get("tool_results", [])
 
     if evidence and use_llm:
-        message = _generate_llm_response(user_message, response_type, evidence)
+        message = _generate_llm_response(user_message, response_type, evidence, conversation_history)
     elif evidence:
         message = _template_recommendation(recommendations)
     elif tool_results:
         message = tool_results[0].get("message", "操作已完成")
     elif response_type == "greeting":
         message = "你好！我是你的智能点餐助手，可以帮你推荐菜品、查找商家信息、管理购物车。"
+    elif response_type == "unsupported":
+        message = (
+            "这个问题超出了我的能力范围。我是你的智能点餐助手，"
+            "可以帮你推荐菜品、查找商家信息、管理购物车和配送地址。"
+            "请问有什么点餐相关的需求吗？"
+        )
     else:
-        message = "我没有找到足够匹配的结果，可以换个说法再试。"
+        message = "我没有找到足够匹配的结果，可以换个说法再试试。"
 
     if evidence and use_llm:
         from service.config import get_config
@@ -605,10 +667,15 @@ def respond_node(state: dict, config: RunnableConfig | None = None) -> dict:
     collector.set_metadata("tool_results_count", len(tool_results))
     collector.emit("agent_respond")
 
-    return {
+    result: dict = {
         "messages": state.get("messages", []) + [AIMessage(content=message)],
         "response_payload": payload,
     }
+    # Carry structured recommendations forward so the next turn can resolve
+    # references like "第一个加购物车" to a concrete dish_id.
+    if recommendations:
+        result["last_recommendations"] = recommendations
+    return result
 
 
 def _build_structured_data(evidence: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -647,14 +714,26 @@ def _build_structured_data(evidence: list[dict]) -> tuple[list[dict], list[dict]
     return recommendations, citations
 
 
-def _generate_llm_response(user_message: str, response_type: str, evidence: list[dict]) -> str:
+def _generate_llm_response(
+    user_message: str,
+    response_type: str,
+    evidence: list[dict],
+    conversation_history: str = "",
+) -> str:
     try:
         from service.agent_runtime.prompts import PromptRegistry
         from tools.llm_tool import call_llm
 
         evidence_text = _format_evidence_for_llm(evidence)
         system_prompt = PromptRegistry().load("agent.answer_grounded")
-        prompt = f"用户消息：{user_message}\n意图：{response_type}\n\n检索到的证据：\n{evidence_text}\n\n请基于证据生成自然回复。"
+        parts = []
+        if conversation_history:
+            parts.append(f"对话历史：\n{conversation_history}\n")
+        parts.append(f"用户最新消息：{user_message}")
+        parts.append(f"意图：{response_type}")
+        parts.append(f"\n检索到的证据：\n{evidence_text}")
+        parts.append("\n请基于证据生成自然回复。")
+        prompt = "\n".join(parts)
         return call_llm(query=prompt, system_instruction=system_prompt)
     except Exception:
         logger.warning("LLM response generation failed, falling back to template", exc_info=True)

@@ -53,6 +53,12 @@
    - arguments：{}
    - writes_database：true
 
+多轮对话规则：
+- 用户输入中可能包含"## 对话历史"和"## 上一轮推荐结果"部分，请结合上下文理解当前用户意图。
+- 当用户说"再来几个""换个口味""还有吗"时，结合对话历史理解用户想要的是什么类型的菜品或商家，生成完整的 normalized_query（例如：对话中提到过川菜，用户说"再来几个"，则 normalized_query 应为"推荐川菜"）。
+- 当用户说"第一个""第二个""那个"等指代词引用上一轮推荐结果时，从"## 上一轮推荐结果"中解析对应的 dish_id，直接写入 tool_calls 的 arguments。例如：上一轮推荐了"1. 宫保鸡丁 (dish_id=12)"，用户说"第一个加购物车"，则输出 add_to_cart 并设置 arguments.dish_id=12。
+- 如果指代无法明确对应到某个推荐结果，使用 normalized_query 触发 RAG 检索而非猜测 dish_id。
+
 规则：
 - 只能使用上面列出的 tool_name，禁止输出 search_dishes、search_cafes、search_menu 等未接入工具。
 - 推荐菜品时 intent=recommendation，requires_rag=true，tool_calls 使用 recommend_dishes，并把用户问题提炼到 arguments.query 和 normalized_query。

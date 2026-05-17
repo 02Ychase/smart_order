@@ -26,6 +26,7 @@ class AssistantStreamService:
         new_message = HumanMessage(content=message)
         messages = history + [new_message]
 
+        last_recs = _conversation_store.get_metadata(session_id, "last_recommendations", [])
         initial_state = {
             "messages": messages,
             "session_id": session_id,
@@ -34,6 +35,7 @@ class AssistantStreamService:
             "recent_evidence": [],
             "recent_action_ids": [],
             "tool_results": [],
+            "last_recommendations": last_recs,
             "iteration_count": 0,
             "max_iterations": 5,
         }
@@ -52,12 +54,17 @@ class AssistantStreamService:
         payload = dict(result.get("response_payload") or {})
         response_message = payload.get("message", "")
 
+        # Build conversation context for the streaming LLM response
+        from service.agent_runtime.nodes import _format_recent_turns
+        conversation_history = _format_recent_turns(messages, max_turns=2)
+
         if result.get("recent_evidence"):
             streamed_message = ""
             async for token in self._stream_grounded_response(
                 user_message=message,
                 response_type=payload.get("response_type", "recommendation"),
                 evidence=result.get("recent_evidence") or [],
+                conversation_history=conversation_history,
             ):
                 streamed_message += token
                 yield {"type": "token", "content": token}
@@ -75,6 +82,10 @@ class AssistantStreamService:
         _conversation_store.append(session_id, new_message)
         if response_message:
             _conversation_store.append(session_id, AIMessage(content=response_message))
+        # Persist recommendations for next-turn ordinal resolution
+        recs = payload.get("recommendations") or result.get("last_recommendations", [])
+        if recs:
+            _conversation_store.set_metadata(session_id, "last_recommendations", recs)
 
         yield {"type": "done"}
 
@@ -84,6 +95,7 @@ class AssistantStreamService:
         user_message: str,
         response_type: str,
         evidence: list[dict],
+        conversation_history: str = "",
     ) -> AsyncIterator[str]:
         try:
             from langchain.chat_models import init_chat_model
@@ -100,7 +112,14 @@ class AssistantStreamService:
 
             evidence_text = _format_evidence_for_llm(evidence)
             system_prompt = PromptRegistry().load("agent.answer_grounded")
-            prompt = f"用户消息：{user_message}\n意图：{response_type}\n\n检索到的证据：\n{evidence_text}\n\n请基于证据生成自然回复。"
+            parts = []
+            if conversation_history:
+                parts.append(f"对话历史：\n{conversation_history}\n")
+            parts.append(f"用户最新消息：{user_message}")
+            parts.append(f"意图：{response_type}")
+            parts.append(f"\n检索到的证据：\n{evidence_text}")
+            parts.append("\n请基于证据生成自然回复。")
+            prompt = "\n".join(parts)
 
             if get_config().guardrails.enable_output_guardrail:
                 chain = ChatPromptTemplate.from_messages([

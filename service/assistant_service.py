@@ -112,6 +112,7 @@ class AssistantService:
         new_message = HumanMessage(content=request.message)
         history = _conversation_store.get_history(session_id)
         messages = history + [new_message]
+        last_recs = _conversation_store.get_metadata(session_id, "last_recommendations", [])
 
         state = {
             "messages": messages,
@@ -121,6 +122,7 @@ class AssistantService:
             "recent_evidence": [],
             "recent_action_ids": [],
             "tool_results": [],
+            "last_recommendations": last_recs,
             "iteration_count": 0,
             "max_iterations": 5,
         }
@@ -137,9 +139,15 @@ class AssistantService:
     @staticmethod
     def _save_conversation(session_id: str, request_message: str, result: dict):
         _conversation_store.append(session_id, HumanMessage(content=request_message))
-        response_msg = result.get("response_payload", {}).get("message", "")
+        payload = result.get("response_payload") or {}
+        response_msg = payload.get("message", "")
         if response_msg:
             _conversation_store.append(session_id, AIMessage(content=response_msg))
+        # Persist structured recommendations so the next turn can resolve
+        # ordinal references ("第一个") to concrete dish_ids.
+        recommendations = payload.get("recommendations") or result.get("last_recommendations", [])
+        if recommendations:
+            _conversation_store.set_metadata(session_id, "last_recommendations", recommendations)
 
     def chat(self, request: AssistantChatRequest) -> AssistantChatResponse:
         session_id = request.session_id or str(uuid.uuid4())

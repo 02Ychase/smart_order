@@ -52,12 +52,14 @@ class LangGraphAgentPlanner:
                 )
 
     def plan(self, user_message: str, context: dict[str, Any]) -> AgentPlan:
+        human_input = self._build_human_input(user_message, context)
+
         # 1. Structured output path (production, primary)
         if self._structured_llm is not None:
             try:
                 schema_result = self._structured_llm.invoke([
                     ("system", self.prompts.load("agent.planner")),
-                    ("human", user_message),
+                    ("human", human_input),
                 ])
                 plan = self._schema_to_plan(schema_result)
                 return self._apply_user_message_hints(plan, user_message)
@@ -82,6 +84,35 @@ class LangGraphAgentPlanner:
         # 3. No LLM configured
         logger.info("No LLM configured, using rule-based planner")
         return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
+
+    @staticmethod
+    def _build_human_input(user_message: str, context: dict[str, Any]) -> str:
+        """Build composite human message that includes conversation history
+        and last recommendations so both structured and fallback LLM paths
+        receive the same multi-turn context."""
+        parts: list[str] = []
+
+        conversation_history = context.get("conversation_history", "")
+        if conversation_history:
+            parts.append(f"## 对话历史\n{conversation_history}")
+
+        last_recs = context.get("last_recommendations", [])
+        if last_recs:
+            rec_lines = []
+            for idx, rec in enumerate(last_recs, 1):
+                name = rec.get("dish_name") or rec.get("merchant_name") or ""
+                dish_id = rec.get("dish_id", "")
+                price = rec.get("price", "")
+                line = f"{idx}. {name}"
+                if dish_id:
+                    line += f" (dish_id={dish_id})"
+                if price:
+                    line += f" {price}元"
+                rec_lines.append(line)
+            parts.append("## 上一轮推荐结果\n" + "\n".join(rec_lines))
+
+        parts.append(f"## 用户最新消息\n{user_message}")
+        return "\n\n".join(parts)
 
     # 把 LLM 结构化输出的 AgentPlanSchema，转换成系统内部真正执行用的 
     # AgentPlan，并在转换过程中做校正、规范化和兜底。

@@ -40,6 +40,7 @@ class AppConfig:
     class GuardrailConfig:
         max_input_length: int = 500
         enable_input_guardrail: bool = True
+        enable_topic_guardrail: bool = True
         enable_output_guardrail: bool = True
 
     rag: RagConfig = field(default_factory=RagConfig)
