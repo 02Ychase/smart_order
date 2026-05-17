@@ -2,6 +2,7 @@ from langchain_core.messages import HumanMessage
 
 from service.agent_runtime.graph import build_agent_graph
 from service.agent_runtime.nodes import load_memory_node, memory_writer_node
+from service.agent_runtime.runtime import AgentRuntimeContext
 from service.agent_runtime.state import AgentPlan
 
 
@@ -30,10 +31,16 @@ class StubMemoryService:
         return self.saved[-1]
 
 
+def _make_config(**kwargs):
+    """Helper to build a LangGraph config with runtime context for node-level tests."""
+    return {"configurable": {"runtime": AgentRuntimeContext(**kwargs)}}
+
+
 def test_load_memory_node_loads_user_memories() -> None:
     state = {"user_id": 9}
+    config = _make_config(memory_service=StubMemoryService())
 
-    result = load_memory_node(state, memory_service=StubMemoryService())
+    result = load_memory_node(state, config)
 
     assert result["loaded_user_memories"][0]["content"] == "prefers spicy Hunan dishes"
 
@@ -50,8 +57,9 @@ def test_memory_writer_saves_high_confidence_memory_candidates() -> None:
         ],
     }
     service = StubMemoryService()
+    config = _make_config(memory_service=service)
 
-    memory_writer_node(state, memory_service=service)
+    memory_writer_node(state, config)
 
     assert service.saved[0]["content"] == "prefers spicy Hunan dishes"
 
@@ -68,8 +76,9 @@ def test_memory_writer_skips_low_confidence_candidates() -> None:
         ],
     }
     service = StubMemoryService()
+    config = _make_config(memory_service=service)
 
-    result = memory_writer_node(state, memory_service=service)
+    result = memory_writer_node(state, config)
 
     assert result["saved_memories"] == []
     assert service.saved == []
@@ -82,7 +91,12 @@ class GreetingPlanner:
 
 def test_graph_writes_memory_candidates_after_response() -> None:
     service = StubMemoryService()
-    graph = build_agent_graph(planner=GreetingPlanner(), memory_service=service)
+    graph = build_agent_graph()
+
+    runtime = AgentRuntimeContext(
+        planner=GreetingPlanner(),
+        memory_service=service,
+    )
 
     result = graph.invoke(
         {
@@ -97,7 +111,7 @@ def test_graph_writes_memory_candidates_after_response() -> None:
                 }
             ],
         },
-        config={"configurable": {"thread_id": "s1"}},
+        config={"configurable": {"thread_id": "s1", "runtime": runtime}},
     )
 
     assert result["saved_memories"][0]["content"] == "prefers spicy Hunan dishes"

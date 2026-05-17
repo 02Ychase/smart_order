@@ -1,6 +1,7 @@
 from langchain_core.messages import HumanMessage
 
 from service.agent_runtime.graph import build_agent_graph
+from service.agent_runtime.runtime import AgentRuntimeContext
 from service.agent_runtime.state import AgentPlan, GraphToolCall
 
 
@@ -40,7 +41,14 @@ class StubActionExecutor:
 
 def test_graph_executes_action_then_undo() -> None:
     executor = StubActionExecutor()
-    graph = build_agent_graph(planner=SequencePlanner(), action_executor=executor)
+    planner = SequencePlanner()
+    graph = build_agent_graph()
+
+    runtime = AgentRuntimeContext(
+        planner=planner,
+        action_executor=executor,
+    )
+    config = {"configurable": {"thread_id": "s1", "runtime": runtime}}
 
     first = graph.invoke(
         {
@@ -48,7 +56,7 @@ def test_graph_executes_action_then_undo() -> None:
             "session_id": "s1",
             "user_id": 9,
         },
-        config={"configurable": {"thread_id": "s1"}},
+        config=config,
     )
     second = graph.invoke(
         {
@@ -57,7 +65,7 @@ def test_graph_executes_action_then_undo() -> None:
             "user_id": 9,
             "recent_action_ids": ["act_1"],
         },
-        config={"configurable": {"thread_id": "s1"}},
+        config=config,
     )
 
     assert first["response_payload"]["response_type"] == "action_completed"

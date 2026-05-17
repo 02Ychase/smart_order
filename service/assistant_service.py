@@ -1,19 +1,93 @@
 import asyncio
 import os
+import threading
 import uuid
 
 from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy.orm import Session
 
 from api.schemas import AssistantChatRequest, AssistantChatResponse, AssistantHealthResponse
-from service.agent_runtime.graph import build_agent_graph
+from service.agent_runtime.graph import get_agent_graph
 from service.agent_runtime.nodes import LocalActionExecutor
+from service.agent_runtime.runtime import AgentRuntimeContext
 from service.config import get_config
 from service.conversation_store import InMemoryConversationStore
 from service.rag.retriever import AdvancedRagRetriever
 from service.user_memory_service import UserMemoryService
 from tools.assistant_vector_store import AssistantVectorStore
 
+# ── Cached stateless components (module-level singletons) ───────────
+# These are expensive to create but don't depend on a DB session.
+
+_dense_route = None
+_cross_encoder = None
+_query_planner = None
+_reranker = None
+_components_lock = threading.Lock()
+
+
+def _get_cached_components():
+    """Lazily initialise and return cached RAG sub-components (thread-safe)."""
+    global _dense_route, _cross_encoder, _query_planner, _reranker
+
+    # Fast path: all already initialised
+    if _dense_route is not None and _cross_encoder is not None and _query_planner is not None and _reranker is not None:
+        return _dense_route, _cross_encoder, _query_planner, _reranker
+
+    with _components_lock:
+        if _dense_route is None:
+            from service.rag.recall import DenseVectorRecallRoute
+            _dense_route = DenseVectorRecallRoute()
+        if _cross_encoder is None:
+            from service.rag.cross_encoder import CrossEncoderReranker
+            _cross_encoder = CrossEncoderReranker()
+        if _query_planner is None:
+            from service.rag.query_planner import RagQueryPlanner
+            _query_planner = RagQueryPlanner()
+        if _reranker is None:
+            from service.rag.reranker import WeightedReranker
+            _reranker = WeightedReranker()
+
+    return _dense_route, _cross_encoder, _query_planner, _reranker
+
+
+def _build_retriever(session):
+    """Build a per-request retriever reusing cached stateless sub-components."""
+    dense_route, cross_encoder, query_planner, reranker = _get_cached_components()
+
+    from service.catalog_service import CatalogService
+    from service.rag.recall import BusinessRecallRoute, SparseVectorRecallRoute, SqlCatalogRecallRoute
+
+    catalog_service = CatalogService(session) if session is not None else None
+    recall_routes = [dense_route]
+    if catalog_service is not None:
+        recall_routes.extend([
+            SparseVectorRecallRoute(catalog_service),
+            SqlCatalogRecallRoute(catalog_service),
+            BusinessRecallRoute(catalog_service),
+        ])
+
+    return AdvancedRagRetriever(
+        session=session,
+        recall_routes=recall_routes,
+        query_planner=query_planner,
+        reranker=reranker,
+        cross_encoder=cross_encoder,
+    )
+
+
+def _build_runtime(session, *, use_llm_response: bool = True) -> AgentRuntimeContext:
+    """Assemble the per-request runtime context."""
+    graph_session = session if session is not None and hasattr(session, "scalars") else None
+    return AgentRuntimeContext(
+        retriever=_build_retriever(graph_session),
+        action_executor=LocalActionExecutor(session),
+        memory_service=UserMemoryService(session) if graph_session is not None else None,
+        use_llm_response=use_llm_response,
+    )
+
+
+# ── Conversation store (shared across services) ────────────────────
 
 def _create_conversation_store() -> InMemoryConversationStore:
     cfg = get_config().agent
@@ -26,26 +100,19 @@ def _create_conversation_store() -> InMemoryConversationStore:
 _conversation_store = _create_conversation_store()
 
 
+# ── AssistantService ────────────────────────────────────────────────
+
 class AssistantService:
     def __init__(self, session: Session):
         self.session = session
+        # Allow test override: set self._graph to a StubGraph to bypass the singleton
         self._graph = None
-
-    def _ensure_graph(self):
-        if self._graph is None:
-            graph_session = self.session if self.session is not None and hasattr(self.session, "scalars") else None
-            self._graph = build_agent_graph(
-                retriever=AdvancedRagRetriever(graph_session),
-                action_executor=LocalActionExecutor(self.session),
-                memory_service=UserMemoryService(self.session) if graph_session is not None else None,
-            )
 
     def _build_invoke_input(self, request: AssistantChatRequest, session_id: str) -> tuple[dict, dict]:
         new_message = HumanMessage(content=request.message)
-        # 根据session_id获取历史消息，并将新消息添加到历史消息中，构建agent的输入状态
         history = _conversation_store.get_history(session_id)
         messages = history + [new_message]
-        # 构建初始输入State
+
         state = {
             "messages": messages,
             "session_id": session_id,
@@ -57,7 +124,14 @@ class AssistantService:
             "iteration_count": 0,
             "max_iterations": 5,
         }
-        config = {"configurable": {"thread_id": session_id}}
+
+        runtime = _build_runtime(self.session, use_llm_response=True)
+        config = {
+            "configurable": {
+                "thread_id": session_id,
+                "runtime": runtime,
+            },
+        }
         return state, config
 
     @staticmethod
@@ -69,20 +143,22 @@ class AssistantService:
 
     def chat(self, request: AssistantChatRequest) -> AssistantChatResponse:
         session_id = request.session_id or str(uuid.uuid4())
-        self._ensure_graph()
+        graph = self._graph or get_agent_graph()
         state, config = self._build_invoke_input(request, session_id)
-        result = self._graph.invoke(state, config=config)
-        self._save_conversation(session_id, request.message, result) 
+        result = graph.invoke(state, config=config)
+        self._save_conversation(session_id, request.message, result)
         return result["response_payload"]
 
     async def async_chat(self, request: AssistantChatRequest) -> AssistantChatResponse:
         session_id = request.session_id or str(uuid.uuid4())
-        self._ensure_graph()
+        graph = self._graph or get_agent_graph()
         state, config = self._build_invoke_input(request, session_id)
-        result = await asyncio.to_thread(self._graph.invoke, state, config)
+        result = await asyncio.to_thread(graph.invoke, state, config)
         self._save_conversation(session_id, request.message, result)
         return result["response_payload"]
 
+
+# ── Health check ────────────────────────────────────────────────────
 
 _health_vector_store: AssistantVectorStore | None = None
 

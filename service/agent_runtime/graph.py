@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, StateGraph
 
@@ -16,34 +18,57 @@ from service.agent_runtime.nodes import (
     route_after_plan,
     undo_node,
 )
-from service.agent_runtime.planner import LangGraphAgentPlanner
 from service.agent_runtime.state import SmartOrderAgentState
-from service.rag.retriever import AdvancedRagRetriever
+
+# ── Cached compiled graph (module-level singleton) ──────────────────
+_compiled_graph = None
+_graph_lock = threading.Lock()
 
 
-def build_agent_graph(
-    planner=None,
-    retriever=None,
-    action_executor=None,
-    memory_service=None,
-    checkpointer=None,
-    use_llm_response: bool = True,
-    max_iterations: int = 3,
-):
-    planner = planner or LangGraphAgentPlanner()
-    retriever = retriever or AdvancedRagRetriever()
-    checkpointer = checkpointer or InMemorySaver()
+def get_agent_graph():
+    """Return the cached compiled agent graph singleton.
+
+    The production graph is compiled **without** a checkpointer so that
+    per-session checkpoint data does not accumulate in process memory.
+    Conversation history is managed externally by InMemoryConversationStore.
+
+    Per-request services are injected via ``config["configurable"]["runtime"]``.
+    """
+    global _compiled_graph
+    if _compiled_graph is not None:
+        return _compiled_graph
+    with _graph_lock:
+        if _compiled_graph is None:
+            _compiled_graph = _build_graph(checkpointer=None)
+    return _compiled_graph
+
+
+def build_agent_graph(checkpointer=None):
+    """Build a fresh (non-cached) agent graph.
+
+    Intended for tests that need an isolated graph instance per test case.
+    Defaults to ``InMemorySaver`` so that multi-turn test scenarios work
+    out of the box.  Production code should use :func:`get_agent_graph`.
+    """
+    if checkpointer is None:
+        checkpointer = InMemorySaver()
+    return _build_graph(checkpointer=checkpointer)
+
+
+def _build_graph(checkpointer=None):
 
     workflow = StateGraph(SmartOrderAgentState)
+
+    # All nodes read runtime services from config, no lambdas needed
     workflow.add_node("input_guardrail", input_guardrail_node)
-    workflow.add_node("load_memory", lambda state: load_memory_node(state, memory_service))
-    workflow.add_node("plan", lambda state: plan_node(state, planner))
-    workflow.add_node("rag", lambda state: rag_node(state, retriever))
-    workflow.add_node("action", lambda state: action_node(state, action_executor))
-    workflow.add_node("undo", lambda state: undo_node(state, action_executor))
+    workflow.add_node("load_memory", load_memory_node)
+    workflow.add_node("plan", plan_node)
+    workflow.add_node("rag", rag_node)
+    workflow.add_node("action", action_node)
+    workflow.add_node("undo", undo_node)
     workflow.add_node("evaluate", evaluate_node)
-    workflow.add_node("respond", lambda state: respond_node(state, use_llm=use_llm_response))
-    workflow.add_node("write_memory", lambda state: memory_writer_node(state, memory_service))
+    workflow.add_node("respond", respond_node)
+    workflow.add_node("write_memory", memory_writer_node)
 
     workflow.set_entry_point("input_guardrail")
     workflow.add_conditional_edges(
@@ -78,4 +103,7 @@ def build_agent_graph(
 
     workflow.add_edge("respond", "write_memory")
     workflow.add_edge("write_memory", END)
-    return workflow.compile(checkpointer=checkpointer)
+
+    if checkpointer is not None:
+        return workflow.compile(checkpointer=checkpointer)
+    return workflow.compile()

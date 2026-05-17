@@ -1,6 +1,7 @@
 from langchain_core.messages import HumanMessage
 
 from service.agent_runtime.graph import build_agent_graph
+from service.agent_runtime.runtime import AgentRuntimeContext
 from service.agent_runtime.state import AgentPlan, GraphToolCall
 
 
@@ -98,8 +99,18 @@ class FailingActionExecutor:
         raise AssertionError("recommendation plans must not route to undo")
 
 
+def _make_config(thread_id, **kwargs):
+    """Helper to build a LangGraph config with runtime context."""
+    return {
+        "configurable": {
+            "thread_id": thread_id,
+            "runtime": AgentRuntimeContext(**kwargs),
+        },
+    }
+
+
 def test_graph_returns_recommendation_response() -> None:
-    graph = build_agent_graph(planner=StubPlanner(), retriever=StubRetriever())
+    graph = build_agent_graph()
 
     result = graph.invoke(
         {
@@ -107,7 +118,7 @@ def test_graph_returns_recommendation_response() -> None:
             "session_id": "s1",
             "user_id": 9,
         },
-        config={"configurable": {"thread_id": "s1"}},
+        config=_make_config("s1", planner=StubPlanner(), retriever=StubRetriever()),
     )
 
     assert result["response_payload"]["response_type"] == "recommendation"
@@ -116,11 +127,7 @@ def test_graph_returns_recommendation_response() -> None:
 
 def test_graph_returns_merchant_recommendations_from_catalog_rag() -> None:
     retriever = MerchantRetriever()
-    graph = build_agent_graph(
-        planner=PlannerWithHallucinatedCafeTool(),
-        retriever=retriever,
-        action_executor=FailingActionExecutor(),
-    )
+    graph = build_agent_graph()
 
     result = graph.invoke(
         {
@@ -128,7 +135,12 @@ def test_graph_returns_merchant_recommendations_from_catalog_rag() -> None:
             "session_id": "s1",
             "user_id": 9,
         },
-        config={"configurable": {"thread_id": "s1-cafes"}},
+        config=_make_config(
+            "s1-cafes",
+            planner=PlannerWithHallucinatedCafeTool(),
+            retriever=retriever,
+            action_executor=FailingActionExecutor(),
+        ),
     )
 
     assert retriever.called is True
@@ -139,11 +151,7 @@ def test_graph_returns_merchant_recommendations_from_catalog_rag() -> None:
 
 
 def test_graph_blocks_injection_via_input_guardrail() -> None:
-    graph = build_agent_graph(
-        planner=StubPlanner(),
-        retriever=StubRetriever(),
-        action_executor=FailingActionExecutor(),
-    )
+    graph = build_agent_graph()
 
     result = graph.invoke(
         {
@@ -151,7 +159,12 @@ def test_graph_blocks_injection_via_input_guardrail() -> None:
             "session_id": "s1",
             "user_id": 9,
         },
-        config={"configurable": {"thread_id": "s1-guardrail"}},
+        config=_make_config(
+            "s1-guardrail",
+            planner=StubPlanner(),
+            retriever=StubRetriever(),
+            action_executor=FailingActionExecutor(),
+        ),
     )
 
     assert result["response_payload"]["response_type"] == "guardrail_blocked"
@@ -160,11 +173,7 @@ def test_graph_blocks_injection_via_input_guardrail() -> None:
 
 def test_graph_routes_read_tool_calls_to_rag_not_action() -> None:
     retriever = StubRetriever()
-    graph = build_agent_graph(
-        planner=PlannerWithHallucinatedReadTool(),
-        retriever=retriever,
-        action_executor=FailingActionExecutor(),
-    )
+    graph = build_agent_graph()
 
     result = graph.invoke(
         {
@@ -172,7 +181,12 @@ def test_graph_routes_read_tool_calls_to_rag_not_action() -> None:
             "session_id": "s1",
             "user_id": 9,
         },
-        config={"configurable": {"thread_id": "s1-read-tool"}},
+        config=_make_config(
+            "s1-read-tool",
+            planner=PlannerWithHallucinatedReadTool(),
+            retriever=retriever,
+            action_executor=FailingActionExecutor(),
+        ),
     )
 
     assert retriever.called is True

@@ -1,6 +1,7 @@
 from langchain_core.messages import HumanMessage
 
 from service.agent_runtime.graph import build_agent_graph
+from service.agent_runtime.runtime import AgentRuntimeContext
 from service.agent_runtime.state import AgentPlan, GraphToolCall
 
 
@@ -61,12 +62,13 @@ def test_multistep_search_then_add():
     retriever = StubRetriever()
     executor = StubActionExecutor()
 
-    graph = build_agent_graph(
+    graph = build_agent_graph()
+
+    runtime = AgentRuntimeContext(
         planner=planner,
         retriever=retriever,
         action_executor=executor,
         use_llm_response=False,
-        max_iterations=5,
     )
 
     result = graph.invoke({
@@ -79,7 +81,7 @@ def test_multistep_search_then_add():
         "tool_results": [],
         "iteration_count": 0,
         "max_iterations": 5,
-    }, config={"configurable": {"thread_id": "test_multi"}})
+    }, config={"configurable": {"thread_id": "test_multi", "runtime": runtime}})
 
     assert result.get("recent_evidence")
     assert result.get("tool_results")

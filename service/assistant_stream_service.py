@@ -6,38 +6,22 @@ from typing import AsyncIterator
 
 from langchain_core.messages import AIMessage, HumanMessage
 
-from service.agent_runtime.graph import build_agent_graph
-from service.agent_runtime.nodes import LocalActionExecutor
-from service.assistant_service import _conversation_store
-from service.rag.retriever import AdvancedRagRetriever
-from service.user_memory_service import UserMemoryService
+from service.agent_runtime.graph import get_agent_graph
+from service.assistant_service import _build_runtime, _conversation_store
 
 
 class AssistantStreamService:
     def __init__(self, session=None):
-        # 数据库ORM Session
         self.session = session
+        # Allow test override
         self._graph = None
-
-    def _ensure_graph(self):
-        if self._graph is None:
-            graph_session = self.session if self.session is not None and hasattr(self.session, "scalars") else None
-            self._graph = build_agent_graph(
-                retriever=AdvancedRagRetriever(graph_session),
-                action_executor=LocalActionExecutor(self.session),
-                # 用户记忆service，用于加载用户长期记忆和写入新的记忆
-                memory_service=UserMemoryService(self.session) if graph_session else None,
-                use_llm_response=False,
-            )
 
     async def stream_chat_tokens(
         self, message: str, session_id: str | None = None, user_id: int | None = None,
     ) -> AsyncIterator[dict]:
         session_id = session_id or str(uuid.uuid4())
-        self._ensure_graph()
+        graph = self._graph or get_agent_graph()
 
-        # 通过session_id获取短期记忆历史消息，并将新消息添加到历史消息中，构建agent的输入状态
-        # 
         history = _conversation_store.get_history(session_id)
         new_message = HumanMessage(content=message)
         messages = history + [new_message]
@@ -54,10 +38,17 @@ class AssistantStreamService:
             "max_iterations": 5,
         }
 
-        config = {"configurable": {"thread_id": session_id}}
+        runtime = _build_runtime(self.session, use_llm_response=False)
+        config = {
+            "configurable": {
+                "thread_id": session_id,
+                "runtime": runtime,
+            },
+        }
+
         response_message = ""
 
-        result = await asyncio.to_thread(self._graph.invoke, initial_state, config)
+        result = await asyncio.to_thread(graph.invoke, initial_state, config)
         payload = dict(result.get("response_payload") or {})
         response_message = payload.get("message", "")
 
@@ -112,8 +103,6 @@ class AssistantStreamService:
             prompt = f"用户消息：{user_message}\n意图：{response_type}\n\n检索到的证据：\n{evidence_text}\n\n请基于证据生成自然回复。"
 
             if get_config().guardrails.enable_output_guardrail:
-                # Match regular chat behavior: generate full LLM response first,
-                # then check guardrail, fall back to template only if it fails.
                 chain = ChatPromptTemplate.from_messages([
                     ("system", "{system_instruction}"),
                     ("human", "{query}"),
@@ -133,7 +122,6 @@ class AssistantStreamService:
                 async for token in self._stream_text(llm_response):
                     yield token
             else:
-                # Stream LLM tokens directly when guardrail is disabled
                 chain = ChatPromptTemplate.from_messages([
                     ("system", "{system_instruction}"),
                     ("human", "{query}"),

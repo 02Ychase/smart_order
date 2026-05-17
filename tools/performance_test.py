@@ -14,9 +14,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from api.db import SessionLocal
 from service.agent_runtime.graph import build_agent_graph
-from service.agent_runtime.state import SmartOrderAgentState
-from service.rag.retriever import AdvancedRagRetriever
+from service.agent_runtime.nodes import LocalActionExecutor
 from service.agent_runtime.planner import LangGraphAgentPlanner
+from service.agent_runtime.runtime import AgentRuntimeContext
+from service.rag.retriever import AdvancedRagRetriever
 from service.user_memory_service import UserMemoryService
 from langchain_core.messages import HumanMessage
 
@@ -24,43 +25,45 @@ from langchain_core.messages import HumanMessage
 def measure_latency(query: str, user_id: int = 1) -> dict:
     """Measure latency of each step in the agent pipeline."""
     results = {}
-    
+
     # Initialize components
     session = SessionLocal()
     memory_service = UserMemoryService(session)
     planner = LangGraphAgentPlanner()
     retriever = AdvancedRagRetriever(session=session)
-    
-    # Build graph
-    graph = build_agent_graph(
+
+    # Build graph and runtime context
+    graph = build_agent_graph()
+    runtime = AgentRuntimeContext(
         planner=planner,
         retriever=retriever,
+        action_executor=LocalActionExecutor(session),
         memory_service=memory_service,
     )
-    
+
     # Prepare initial state
     initial_state = {
         "messages": [HumanMessage(content=query)],
         "session_id": "test_session",
         "user_id": user_id,
     }
-    
+
     # Measure total time
     start_total = time.time()
-    
-    # Run the graph
-    config = {"configurable": {"thread_id": "test_thread"}}
+
+    # Run the graph with runtime injected via config
+    config = {"configurable": {"thread_id": "test_thread", "runtime": runtime}}
     final_state = graph.invoke(initial_state, config)
-    
+
     end_total = time.time()
     results["total"] = end_total - start_total
-    
+
     # Get the response
     if final_state.get("response_payload"):
         results["response"] = final_state["response_payload"].get("message", "")
     else:
         results["response"] = "No response"
-    
+
     session.close()
     return results
 

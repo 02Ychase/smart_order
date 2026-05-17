@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import time
 from collections import OrderedDict
 from typing import Any
@@ -21,16 +22,19 @@ from service.config import get_config
 
 logger = logging.getLogger(__name__)
 
+# ── Module-level shared RAG result cache (thread-safe) ──────────────
+_rag_cache: OrderedDict[str, tuple[float, list[dict[str, Any]]]] = OrderedDict()
+_rag_cache_lock = threading.Lock()
+
 
 class AdvancedRagRetriever:
-    def __init__(self, session=None, recall_routes=None, query_planner=None, reranker=None) -> None:
+    def __init__(self, session=None, recall_routes=None, query_planner=None, reranker=None, cross_encoder=None) -> None:
         catalog_service = CatalogService(session) if session is not None else None
         self.query_planner = query_planner or RagQueryPlanner()
         if recall_routes is not None:
             self.recall_routes = recall_routes
         else:
             self.recall_routes = [DenseVectorRecallRoute()]
-            # 能访问数据库时启动四路召回
             if catalog_service is not None:
                 self.recall_routes.extend([
                     SparseVectorRecallRoute(catalog_service),
@@ -38,8 +42,7 @@ class AdvancedRagRetriever:
                     BusinessRecallRoute(catalog_service),
                 ])
         self.reranker = reranker or WeightedReranker()
-        self.cross_encoder = CrossEncoderReranker()
-        self._cache: OrderedDict[str, tuple[float, list[dict[str, Any]]]] = OrderedDict()
+        self.cross_encoder = cross_encoder or CrossEncoderReranker()
 
     def retrieve(self, original_query: str, agent_plan: AgentPlan, memories: list[dict] | None = None, limit: int = 5) -> list[RagEvidence]:
         from service.observability import MetricsCollector
@@ -97,6 +100,7 @@ class AdvancedRagRetriever:
 
     def _cache_key(self, plan, memories: list[dict] | None = None) -> str:
         must = plan.must_filters or {}
+        should = plan.should_filters or {}
         memory_hash = ""
         if memories:
             memory_contents = sorted([str(m.get("content", "")) for m in memories])
@@ -104,37 +108,55 @@ class AdvancedRagRetriever:
                 json.dumps(memory_contents, sort_keys=True).encode()
             ).hexdigest()[:16]
         raw = "|".join([
+            # query identity
             plan.normalized_query or "",
+            plan.original_query or "",
             memory_hash,
+            ",".join(sorted(plan.expansion_queries)),
+            # structural parameters that change recall / output shape
+            ",".join(sorted(plan.source_types)),
+            plan.answer_mode or "",
+            # must_filters (hard filters)
             ",".join(sorted(must.get("cuisine_types") or [])),
             str(must.get("budget_max") or ""),
             str(must.get("party_size") or ""),
             ",".join(sorted(must.get("exclude_allergens") or [])),
             ",".join(sorted(must.get("required_keywords") or [])),
             ",".join(sorted(must.get("forbidden_keywords") or [])),
+            str(must.get("merchant_name") or ""),
+            # should_filters (soft filters / ordering)
+            ",".join(sorted(should.get("flavor_preferences") or [])),
+            str(should.get("limit") or ""),
+            str(should.get("sort_by") or ""),
+            str(should.get("price_preference") or ""),
+            # preference hints
             ",".join(sorted(plan.preferred_dishes)),
             ",".join(sorted(plan.preferred_merchants)),
         ])
         return hashlib.sha256(raw.encode()).hexdigest()
 
-    def _cache_get(self, key: str) -> list[dict] | None:
-        entry = self._cache.get(key)
-        if entry is None:
-            return None
-        ts, data = entry
-        if time.monotonic() - ts > get_config().rag.cache_ttl_seconds:
-            del self._cache[key]
-            return None
-        self._cache.move_to_end(key)
-        return data
+    @staticmethod
+    def _cache_get(key: str) -> list[dict] | None:
+        with _rag_cache_lock:
+            entry = _rag_cache.get(key)
+            if entry is None:
+                return None
+            ts, data = entry
+            if time.monotonic() - ts > get_config().rag.cache_ttl_seconds:
+                del _rag_cache[key]
+                return None
+            _rag_cache.move_to_end(key)
+            return data
 
-    def _cache_set(self, key: str, data: list[dict]) -> None:
-        if key in self._cache:
-            self._cache.move_to_end(key)
-        else:
-            while len(self._cache) >= get_config().rag.cache_max_size:
-                self._cache.popitem(last=False)
-            self._cache[key] = (time.monotonic(), data)
+    @staticmethod
+    def _cache_set(key: str, data: list[dict]) -> None:
+        with _rag_cache_lock:
+            if key in _rag_cache:
+                _rag_cache.move_to_end(key)
+            else:
+                while len(_rag_cache) >= get_config().rag.cache_max_size:
+                    _rag_cache.popitem(last=False)
+                _rag_cache[key] = (time.monotonic(), data)
 
     def _parallel_recall(self, plan, limit: int) -> list[list]:
         results: list[list] = []

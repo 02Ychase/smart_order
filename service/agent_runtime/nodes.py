@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 import json
 import logging
 
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
 
 from service.agent_runtime.planner import ACTION_TOOL_NAMES, RAG_TOOL_NAMES, LangGraphAgentPlanner
+from service.agent_runtime.runtime import get_runtime
 from service.rag.retriever import AdvancedRagRetriever
 
 logger = logging.getLogger(__name__)
@@ -55,25 +55,38 @@ def input_guardrail_node(state: dict) -> dict:
     return {"guardrail_blocked": False}
 
 
-def load_memory_node(state: dict, memory_service=None) -> dict:
+def load_memory_node(state: dict, config: RunnableConfig | None = None) -> dict:
     from service.observability import MetricsCollector
-    # 记录当前节点的一些运行信息，方便后面排查性能、错误、链路行为
+
+    runtime = get_runtime(config)
+    memory_service = runtime.memory_service if runtime else None
+
     collector = MetricsCollector()
     collector.set_metadata("session_id", state.get("session_id"))
     collector.set_metadata("user_id", state.get("user_id"))
 
+    # Reset per-turn transient state so previous turns don't bleed through
+    turn_reset = {
+        "tool_results": [],
+        "recent_evidence": [],
+        "iteration_count": 0,
+        "current_plan": None,
+    }
+
     user_id = state.get("user_id")
     if user_id is None or memory_service is None:
-        return {"loaded_user_memories": [], "metrics": collector.to_log_dict()}
+        return {**turn_reset, "loaded_user_memories": [], "metrics": collector.to_log_dict()}
 
-    # 统计这一步的耗时
     with collector.timer("load_memory"):
         memories = memory_service.list_memories(user_id)
 
-    return {"loaded_user_memories": memories, "metrics": collector.to_log_dict()}
+    return {**turn_reset, "loaded_user_memories": memories, "metrics": collector.to_log_dict()}
 
 
-def memory_writer_node(state: dict, memory_service=None) -> dict:
+def memory_writer_node(state: dict, config: RunnableConfig | None = None) -> dict:
+    runtime = get_runtime(config)
+    memory_service = runtime.memory_service if runtime else None
+
     user_id = state.get("user_id")
     if user_id is None or memory_service is None:
         return {"saved_memories": []}
@@ -124,7 +137,10 @@ def _format_conversation_for_memory(messages: list) -> str:
     return "\n".join(parts)
 
 
-def plan_node(state: dict, planner: LangGraphAgentPlanner) -> dict:
+def plan_node(state: dict, config: RunnableConfig | None = None) -> dict:
+    runtime = get_runtime(config)
+    planner = (runtime.planner if runtime else None) or _get_default_planner()
+
     user_message = latest_user_message(state)
     plan = planner.plan(
         user_message,
@@ -139,6 +155,17 @@ def plan_node(state: dict, planner: LangGraphAgentPlanner) -> dict:
         },
     )
     return {"current_plan": plan}
+
+
+# ── Cached default planner (module-level singleton) ─────────────────
+_default_planner: LangGraphAgentPlanner | None = None
+
+
+def _get_default_planner() -> LangGraphAgentPlanner:
+    global _default_planner
+    if _default_planner is None:
+        _default_planner = LangGraphAgentPlanner()
+    return _default_planner
 
 
 def route_after_plan(state: dict) -> str:
@@ -225,7 +252,10 @@ def route_after_evaluate(state: dict) -> str:
     return state.get("_next", "respond")
 
 
-def rag_node(state: dict, retriever: AdvancedRagRetriever) -> dict:
+def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
+    runtime = get_runtime(config)
+    retriever = (runtime.retriever if runtime else None) or AdvancedRagRetriever()
+
     plan = state["current_plan"]
     user_message = latest_user_message(state)
     evidence = retriever.retrieve(
@@ -443,8 +473,9 @@ class LocalActionExecutor:
         return {"success": False, "message": f"该操作暂不支持撤回: {action_type}"}
 
 
-def action_node(state: dict, action_executor=None) -> dict:
-    executor = action_executor or LocalActionExecutor()
+def action_node(state: dict, config: RunnableConfig | None = None) -> dict:
+    runtime = get_runtime(config)
+    executor = (runtime.action_executor if runtime else None) or LocalActionExecutor()
     plan = state["current_plan"]
 
     # Determine which action tool will be executed next
@@ -470,8 +501,9 @@ def action_node(state: dict, action_executor=None) -> dict:
     }
 
 
-def undo_node(state: dict, action_executor=None) -> dict:
-    executor = action_executor or LocalActionExecutor()
+def undo_node(state: dict, config: RunnableConfig | None = None) -> dict:
+    runtime = get_runtime(config)
+    executor = (runtime.action_executor if runtime else None) or LocalActionExecutor()
     result = executor.undo_last(state)
     existing_results = list(state.get("tool_results", []))
     existing_results.append(_normalize_tool_result(result, state, "undo_last_action"))
@@ -496,7 +528,9 @@ def _normalize_tool_result(result: dict, state: dict, executed_tool_name: str = 
     }
 
 
-def respond_node(state: dict, use_llm: bool = True) -> dict:
+def respond_node(state: dict, config: RunnableConfig | None = None) -> dict:
+    runtime = get_runtime(config)
+    use_llm = runtime.use_llm_response if runtime else True
     # Handle guardrail-blocked requests
     if state.get("guardrail_blocked"):
         message = "抱歉，您的请求无法处理。请尝试换一种方式提问。"
