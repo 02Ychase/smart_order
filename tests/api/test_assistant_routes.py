@@ -141,6 +141,38 @@ def test_assistant_chat_can_return_pending_action(assistant_test_context, monkey
     assert response.json()["pending_action"]["action_id"] == "pa_1"
 
 
+def test_assistant_chat_can_return_off_topic(assistant_test_context, monkeypatch) -> None:
+    client, assistant_routes = assistant_test_context
+
+    class OffTopicAssistantService:
+        def __init__(self, session):
+            pass
+
+        async def async_chat(self, request):
+            return {
+                "session_id": request.session_id or "s1",
+                "message": "我是你的智能点餐助手，可以帮你推荐菜品、查找商家信息、管理购物车。",
+                "response_type": "off_topic",
+                "needs_clarification": False,
+                "clarification_question": None,
+                "extracted_constraints": None,
+                "recommendations": [],
+                "comparisons": [],
+                "citations": [],
+                "suggested_actions": [],
+                "pending_action": None,
+                "executed_actions": [],
+                "undo_available": False,
+            }
+
+    monkeypatch.setattr(assistant_routes, "AssistantService", OffTopicAssistantService)
+
+    response = client.post("/assistant/chat", json={"message": "帮我写一篇论文"})
+
+    assert response.status_code == 200
+    assert response.json()["response_type"] == "off_topic"
+
+
 def test_assistant_health_reports_dependency_flags(assistant_test_context, monkeypatch) -> None:
     client, assistant_routes = assistant_test_context
     expected_payload = {
