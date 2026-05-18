@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 
+from langsmith import traceable
+
 from service.catalog_service import CatalogService
 from service.rag.models import RagQueryPlan, RecallCandidate
 from tools.assistant_vector_store import AssistantVectorStore
@@ -11,6 +13,7 @@ class DenseVectorRecallRoute:
     def __init__(self, vector_store: AssistantVectorStore | None = None) -> None:
         self.vector_store = vector_store or AssistantVectorStore()
 
+    @traceable(name="dense_vector_recall")
     def recall(self, plan: RagQueryPlan, limit: int) -> list[RecallCandidate]:
         if not self.vector_store.is_ready():
             return []
@@ -59,6 +62,7 @@ class SqlCatalogRecallRoute:
         }
         return self._merchant_cache
 
+    @traceable(name="sql_catalog_recall")
     def recall(self, plan: RagQueryPlan, limit: int) -> list[RecallCandidate]:
         candidates = []
         cuisine_types = list(plan.should_filters.get("cuisine_types") or [])
@@ -131,6 +135,7 @@ class BusinessRecallRoute:
     def __init__(self, catalog_service: CatalogService) -> None:
         self.catalog_service = catalog_service
 
+    @traceable(name="business_recall")
     def recall(self, plan: RagQueryPlan, limit: int) -> list[RecallCandidate]:
         # Skip dish recommendations when only merchant data is requested
         if plan.source_types and "dish" not in plan.source_types:
@@ -279,6 +284,7 @@ class SparseVectorRecallRoute:
 
     # ── recall ──────────────────────────────────────────────────────
 
+    @traceable(name="sparse_vector_recall")
     def recall(self, plan: RagQueryPlan, limit: int) -> list[RecallCandidate]:
         if not self._built:
             self.build_index()

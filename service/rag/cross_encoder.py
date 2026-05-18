@@ -4,6 +4,8 @@ import logging
 import os
 from http import HTTPStatus
 
+from langsmith import traceable
+
 from service.rag.models import FusedCandidate
 
 logger = logging.getLogger(__name__)
@@ -13,6 +15,7 @@ class CrossEncoderReranker:
     def __init__(self, scorer=None) -> None:
         self._scorer = scorer or _DashScopeReranker()
 
+    @traceable(name="cross_encoder_rerank")
     def rerank(self, query: str, candidates: list[FusedCandidate], top_k: int = 10) -> list[FusedCandidate]:
         if not candidates:
             return []

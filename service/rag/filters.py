@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from langsmith import traceable
+
 from service.rag.models import FusedCandidate, RagQueryPlan
 
 
+@traceable(name="apply_hard_filters")
 def apply_hard_filters(candidates: list[FusedCandidate], plan: RagQueryPlan) -> list[FusedCandidate]:
     filters = plan.must_filters or {}
     exclude_allergens = set(filters.get("exclude_allergens") or [])

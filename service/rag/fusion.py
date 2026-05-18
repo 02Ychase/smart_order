@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from langsmith import traceable
+
 from service.rag.models import FusedCandidate, RecallCandidate
 
 
+@traceable(name="reciprocal_rank_fusion")
 def reciprocal_rank_fusion(route_results: list[list[RecallCandidate]], limit: int = 50, k: int = 60) -> list[FusedCandidate]:
     by_key: dict[str, FusedCandidate] = {}
     totals: dict[str, float] = {}

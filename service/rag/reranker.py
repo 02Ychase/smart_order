@@ -6,6 +6,7 @@ import os
 from http import HTTPStatus
 
 import dashscope
+from langsmith import traceable
 
 from service.cache import TieredCache
 from service.config import get_config
@@ -32,6 +33,7 @@ class WeightedReranker:
         weights = config.intent_weights
         return weights.get(intent, weights.get("default", {}))
 
+    @traceable(name="weighted_rerank")
     def rerank(
         self,
         candidates: list[FusedCandidate],

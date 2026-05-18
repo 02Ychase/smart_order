@@ -256,13 +256,17 @@ def evaluate_node(state: dict) -> dict:
     max_iter = state.get("max_iterations", 5)
     logger.debug("Agent evaluate: iteration=%d/%d", iteration, max_iter)
 
+    # Merge iteration_count into cumulative metrics
+    existing_metrics = dict(state.get("metrics") or {})
+    existing_metrics["iteration_count"] = iteration
+
     if iteration >= max_iter:
         logger.debug("Agent evaluate: max iterations reached → respond")
-        return {"iteration_count": iteration, "_next": "respond"}
+        return {"iteration_count": iteration, "_next": "respond", "metrics": existing_metrics}
 
     plan = state.get("current_plan")
     if plan is None:
-        return {"iteration_count": iteration, "_next": "respond"}
+        return {"iteration_count": iteration, "_next": "respond", "metrics": existing_metrics}
 
     completed_tools = {r.get("type", "") for r in state.get("tool_results", [])}
     pending_calls = [
@@ -275,21 +279,21 @@ def evaluate_node(state: dict) -> dict:
 
     if has_pending_rag:
         logger.debug("Agent evaluate: pending RAG calls → plan (re-route to rag)")
-        return {"iteration_count": iteration, "_next": "plan"}
+        return {"iteration_count": iteration, "_next": "plan", "metrics": existing_metrics}
 
     if has_pending_action:
         logger.debug("Agent evaluate: pending action calls → plan (re-route to action)")
-        return {"iteration_count": iteration, "_next": "plan"}
+        return {"iteration_count": iteration, "_next": "plan", "metrics": existing_metrics}
 
     has_evidence = bool(state.get("recent_evidence"))
     has_tool_results = bool(state.get("tool_results"))
 
     if has_evidence or has_tool_results:
         logger.debug("Agent evaluate: all steps done → respond")
-        return {"iteration_count": iteration, "_next": "respond"}
+        return {"iteration_count": iteration, "_next": "respond", "metrics": existing_metrics}
 
     logger.debug("Agent evaluate: no results yet → plan")
-    return {"iteration_count": iteration, "_next": "plan"}
+    return {"iteration_count": iteration, "_next": "plan", "metrics": existing_metrics}
 
 
 def route_after_evaluate(state: dict) -> str:
@@ -664,16 +668,16 @@ def respond_node(state: dict, config: RunnableConfig | None = None) -> dict:
         "undo_available": bool(state.get("recent_action_ids")),
     }
 
-    from service.observability import MetricsCollector
-    collector = MetricsCollector()
-    collector.set_metadata("response_type", response_type)
-    collector.set_metadata("evidence_count", len(evidence))
-    collector.set_metadata("tool_results_count", len(tool_results))
-    collector.emit("agent_respond")
+    # Merge respond-node metrics into cumulative state["metrics"]
+    existing_metrics = dict(state.get("metrics") or {})
+    existing_metrics["response_type"] = response_type
+    existing_metrics["evidence_count"] = len(evidence)
+    existing_metrics["tool_results_count"] = len(tool_results)
 
     result: dict = {
         "messages": state.get("messages", []) + [AIMessage(content=message)],
         "response_payload": payload,
+        "metrics": existing_metrics,
     }
     # Carry structured recommendations forward so the next turn can resolve
     # references like "第一个加购物车" to a concrete dish_id.

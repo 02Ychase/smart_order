@@ -8,6 +8,8 @@ import time
 from collections import OrderedDict
 from typing import Any
 
+from langsmith import traceable
+
 from service.agent_runtime.state import AgentPlan
 from service.catalog_service import CatalogService
 from service.rag.diversifier import diversify
@@ -44,6 +46,7 @@ class AdvancedRagRetriever:
         self.reranker = reranker or WeightedReranker()
         self.cross_encoder = cross_encoder or CrossEncoderReranker()
 
+    @traceable(name="rag_retrieve")
     def retrieve(
         self,
         original_query: str,
@@ -70,17 +73,14 @@ class AdvancedRagRetriever:
             collector.emit("rag_retrieve")
             return [self._dict_to_evidence(item) for item in cached]
 
-        with collector.timer("recall"):
-            route_results = self._parallel_recall(plan, limit=50)
+        route_results = self._parallel_recall(plan, limit=50)
         recall_counts = [len(r) for r in route_results]
         logger.debug("RAG recall: routes=%d, counts=%s, query=%s", len(route_results), recall_counts, plan.normalized_query)
 
-        with collector.timer("fusion"):
-            fused = reciprocal_rank_fusion(route_results, limit=50)
+        fused = reciprocal_rank_fusion(route_results, limit=50)
         logger.debug("RAG fusion: %d candidates after RRF", len(fused))
 
-        with collector.timer("filter"):
-            filtered = apply_hard_filters(fused, plan)
+        filtered = apply_hard_filters(fused, plan)
         logger.debug("RAG filter: %d candidates after hard filters (removed %d)", len(filtered), len(fused) - len(filtered))
 
         # Cross-encoder reranking (after hard filters, before weighted rerank)
@@ -88,13 +88,11 @@ class AdvancedRagRetriever:
             filtered = self.cross_encoder.rerank(original_query, filtered, top_k=min(20, len(filtered)))
             logger.debug("RAG cross-encoder: %d candidates after reranking", len(filtered))
 
-        with collector.timer("rerank"):
-            ranked = self.reranker.rerank(filtered, original_query=original_query, query_plan=plan, memories=memories or [])
+        ranked = self.reranker.rerank(filtered, original_query=original_query, query_plan=plan, memories=memories or [])
         ranked = self._apply_result_ordering(ranked, plan)
 
         merchant_scoped = bool(plan.must_filters.get("merchant_name"))
-        with collector.timer("diversify"):
-            diversified = diversify(ranked, limit=output_limit, merchant_scoped=merchant_scoped)
+        diversified = diversify(ranked, limit=output_limit, merchant_scoped=merchant_scoped)
         logger.debug("RAG diversify: %d candidates after diversity (limit=%d)", len(diversified), output_limit)
 
         collector.set_metadata("recall_counts", recall_counts)
@@ -169,6 +167,7 @@ class AdvancedRagRetriever:
                     _rag_cache.popitem(last=False)
                 _rag_cache[key] = (time.monotonic(), data)
 
+    @traceable(name="parallel_recall")
     def _parallel_recall(self, plan, limit: int) -> list[list]:
         results: list[list] = []
         for route in self.recall_routes:

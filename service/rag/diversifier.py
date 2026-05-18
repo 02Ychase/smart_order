@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from langsmith import traceable
+
 from service.rag.models import FusedCandidate
 
 
+@traceable(name="diversify")
 def diversify(
     candidates: list[FusedCandidate],
     limit: int,
