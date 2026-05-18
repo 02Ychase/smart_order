@@ -14,6 +14,8 @@ class AppConfig:
         cross_encoder_top_k: int = 20
         output_limit_default: int = 5
         output_limit_max: int = 20
+        parallel_recall: bool = True
+        recall_max_workers: int = 4
         bm25_k1: float = 1.2
         bm25_b: float = 0.75
         intent_weights: dict = field(default_factory=lambda: {

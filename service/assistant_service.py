@@ -55,6 +55,7 @@ def _build_retriever(session):
     """Build a per-request retriever reusing cached stateless sub-components."""
     dense_route, cross_encoder, query_planner, reranker = _get_cached_components()
 
+    from api.db import SessionLocal
     from service.catalog_service import CatalogService
     from service.rag.recall import BusinessRecallRoute, SparseVectorRecallRoute, SqlCatalogRecallRoute
 
@@ -73,6 +74,7 @@ def _build_retriever(session):
         query_planner=query_planner,
         reranker=reranker,
         cross_encoder=cross_encoder,
+        session_factory=SessionLocal,
     )
 
 

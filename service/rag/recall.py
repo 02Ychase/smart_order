@@ -10,6 +10,8 @@ from tools.assistant_vector_store import AssistantVectorStore
 
 
 class DenseVectorRecallRoute:
+    requires_db_session: bool = False
+
     def __init__(self, vector_store: AssistantVectorStore | None = None) -> None:
         self.vector_store = vector_store or AssistantVectorStore()
 
@@ -49,6 +51,8 @@ class DenseVectorRecallRoute:
 
 
 class SqlCatalogRecallRoute:
+    requires_db_session: bool = True
+
     def __init__(self, catalog_service: CatalogService) -> None:
         self.catalog_service = catalog_service
         self._merchant_cache: dict[int, dict] | None = None
@@ -132,6 +136,8 @@ class SqlCatalogRecallRoute:
 
 
 class BusinessRecallRoute:
+    requires_db_session: bool = True
+
     def __init__(self, catalog_service: CatalogService) -> None:
         self.catalog_service = catalog_service
 
@@ -208,6 +214,8 @@ class SparseVectorRecallRoute:
     bigrams (effective for Chinese without a segmenter).  Scores documents with
     the BM25 ranking function.
     """
+
+    requires_db_session: bool = True
 
     _BM25_K1: float = 1.2
     _BM25_B: float = 0.75

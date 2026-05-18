@@ -6,7 +6,8 @@ import logging
 import threading
 import time
 from collections import OrderedDict
-from typing import Any
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable
 
 from langsmith import traceable
 
@@ -30,7 +31,16 @@ _rag_cache_lock = threading.Lock()
 
 
 class AdvancedRagRetriever:
-    def __init__(self, session=None, recall_routes=None, query_planner=None, reranker=None, cross_encoder=None) -> None:
+    def __init__(
+        self,
+        session=None,
+        recall_routes=None,
+        query_planner=None,
+        reranker=None,
+        cross_encoder=None,
+        session_factory: Callable | None = None,
+    ) -> None:
+        self._session_factory = session_factory
         catalog_service = CatalogService(session) if session is not None else None
         self.query_planner = query_planner or RagQueryPlanner()
         if recall_routes is not None:
@@ -169,6 +179,22 @@ class AdvancedRagRetriever:
 
     @traceable(name="parallel_recall")
     def _parallel_recall(self, plan, limit: int) -> list[list]:
+        cfg = get_config().rag
+
+        if not cfg.parallel_recall or len(self.recall_routes) <= 1:
+            return self._sequential_recall(plan, limit)
+
+        max_workers = min(cfg.recall_max_workers, len(self.recall_routes))
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(self._run_single_route, route, plan, limit)
+                for route in self.recall_routes
+            ]
+            return [f.result() for f in futures]
+
+    def _sequential_recall(self, plan, limit: int) -> list[list]:
+        """Fallback sequential recall (used when parallel_recall=False)."""
         results: list[list] = []
         for route in self.recall_routes:
             try:
@@ -179,6 +205,46 @@ class AdvancedRagRetriever:
                 logger.warning("RAG recall route %s failed: %s", route.__class__.__name__, e)
                 results.append([])
         return results
+
+    def _run_single_route(self, route, plan, limit: int) -> list:
+        """Execute one recall route in a worker thread.
+
+        If the route declares ``requires_db_session = True`` and a
+        *session_factory* is available, a **fresh** SQLAlchemy session is
+        created for this thread so that routes never share a session
+        concurrently.  The exception is :class:`SparseVectorRecallRoute`
+        whose BM25 index, once built, is purely in-memory and safe to
+        read across threads.
+        """
+        needs_own_session = (
+            getattr(route, "requires_db_session", False)
+            and self._session_factory is not None
+        )
+        # Sparse route with a pre-built index is purely in-memory; skip
+        # session creation to avoid rebuilding the BM25 index every call.
+        if needs_own_session and getattr(route, "_built", False):
+            needs_own_session = False
+
+        if needs_own_session:
+            session = self._session_factory()
+            try:
+                route_instance = route.__class__(CatalogService(session))
+                result = route_instance.recall(plan, limit)
+                logger.debug("RAG recall route %s returned %d candidates", route.__class__.__name__, len(result))
+                return result
+            except Exception as e:
+                logger.warning("RAG recall route %s failed: %s", route.__class__.__name__, e)
+                return []
+            finally:
+                session.close()
+        else:
+            try:
+                result = route.recall(plan, limit)
+                logger.debug("RAG recall route %s returned %d candidates", route.__class__.__name__, len(result))
+                return result
+            except Exception as e:
+                logger.warning("RAG recall route %s failed: %s", route.__class__.__name__, e)
+                return []
 
     @staticmethod
     def _evidence_to_dict(evidence: RagEvidence) -> dict[str, Any]:
