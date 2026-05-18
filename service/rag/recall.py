@@ -20,21 +20,38 @@ class DenseVectorRecallRoute:
         if not self.vector_store.is_ready():
             return []
 
-        candidates = []
-        rank = 1
-        for query in plan.expansion_queries or [plan.normalized_query]:
-            for namespace in ("dishes", "merchants"):
-                if namespace == "dishes" and "dish" not in plan.source_types:
-                    continue
-                if namespace == "merchants" and "merchant" not in plan.source_types:
-                    continue
-                for match in self.vector_store.semantic_search(query, top_k=limit, namespace=namespace):
+        queries = list(dict.fromkeys(
+            query for query in (plan.expansion_queries or [plan.normalized_query])
+            if query
+        ))
+        if not queries:
+            return []
+
+        namespaces = [
+            ns for ns in ("dishes", "merchants")
+            if (ns == "dishes" and "dish" in plan.source_types)
+            or (ns == "merchants" and "merchant" in plan.source_types)
+        ]
+        if not namespaces:
+            return []
+
+        # Each query × namespace is a sub-route; distribute limit evenly.
+        num_searches = len(queries) * len(namespaces)
+        per_query = math.ceil(limit / max(num_searches, 1))
+
+        sub_results: list[list[RecallCandidate]] = []
+        for query in queries:
+            for namespace in namespaces:
+                sub_candidates: list[RecallCandidate] = []
+                for rank, match in enumerate(
+                    self.vector_store.semantic_search(query, top_k=per_query, namespace=namespace), 1,
+                ):
                     metadata = match.get("metadata", {})
                     facts = dict(metadata)
                     facts.setdefault("is_available", True)
                     source_type = metadata.get("source_type", "dish")
                     source_id = int(metadata.get("source_id") or metadata.get("dish_id") or metadata.get("merchant_id"))
-                    candidates.append(
+                    sub_candidates.append(
                         RecallCandidate(
                             stable_key=f"{source_type}:{source_id}",
                             source_type=source_type,
@@ -46,8 +63,37 @@ class DenseVectorRecallRoute:
                             citation=str(metadata.get("content", ""))[:180],
                         )
                     )
-                    rank += 1
-        return candidates[:limit]
+                sub_results.append(sub_candidates)
+
+        return self._rrf_merge(sub_results, limit)
+
+    @staticmethod
+    def _rrf_merge(
+        sub_results: list[list[RecallCandidate]], limit: int, k: int = 60,
+    ) -> list[RecallCandidate]:
+        """Lightweight RRF across query × namespace sub-routes.
+
+        Candidates found by multiple sub-routes accumulate a higher RRF
+        score, so items that consistently rank well across different
+        expansion queries surface to the top.
+        """
+        rrf_scores: dict[str, float] = {}
+        best: dict[str, RecallCandidate] = {}
+
+        for candidates in sub_results:
+            for c in candidates:
+                rrf_scores[c.stable_key] = rrf_scores.get(c.stable_key, 0.0) + 1.0 / (k + c.rank)
+                if c.stable_key not in best or c.score > best[c.stable_key].score:
+                    best[c.stable_key] = c
+
+        sorted_keys = sorted(rrf_scores, key=lambda key: rrf_scores[key], reverse=True)
+        result: list[RecallCandidate] = []
+        for rank, key in enumerate(sorted_keys[:limit], 1):
+            candidate = best[key]
+            candidate.rank = rank
+            candidate.score = rrf_scores[key]
+            result.append(candidate)
+        return result
 
 
 class SqlCatalogRecallRoute:
