@@ -156,6 +156,21 @@ def test_rrf_keeps_highest_vector_score_for_facts() -> None:
     assert result[0].stable_key == "dish:1"
 
 
+def test_rrf_preserves_vector_score_for_downstream_rerank() -> None:
+    """Internal RRF should not overwrite the vector similarity score."""
+    store = RecordingVectorStore({
+        ("q1", "dishes"): [_match(1, 0.7), _match(2, 0.9)],
+        ("q2", "dishes"): [_match(1, 0.95)],
+    })
+    plan = _plan(expansion_queries=["q1", "q2"], source_types=["dish"])
+
+    result = DenseVectorRecallRoute(store).recall(plan, limit=50)
+
+    by_key = {candidate.stable_key: candidate for candidate in result}
+    assert by_key["dish:1"].score == 0.95
+    assert by_key["dish:2"].score == 0.9
+
+
 def test_ranks_are_reassigned_by_rrf_score() -> None:
     """Output ranks should be 1, 2, 3... based on RRF score, not insertion order."""
     store = RecordingVectorStore({

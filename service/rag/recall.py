@@ -91,7 +91,6 @@ class DenseVectorRecallRoute:
         for rank, key in enumerate(sorted_keys[:limit], 1):
             candidate = best[key]
             candidate.rank = rank
-            candidate.score = rrf_scores[key]
             result.append(candidate)
         return result
 
