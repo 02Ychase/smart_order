@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import logging
@@ -187,10 +188,14 @@ class AdvancedRagRetriever:
         max_workers = min(cfg.recall_max_workers, len(self.recall_routes))
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(self._run_single_route, route, plan, limit)
-                for route in self.recall_routes
-            ]
+            futures = []
+            for route in self.recall_routes:
+                # Each worker gets its own context copy so LangSmith
+                # child spans nest correctly under parallel_recall.
+                ctx = contextvars.copy_context()
+                futures.append(
+                    executor.submit(ctx.run, self._run_single_route, route, plan, limit)
+                )
             return [f.result() for f in futures]
 
     def _sequential_recall(self, plan, limit: int) -> list[list]:
