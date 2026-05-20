@@ -15,7 +15,6 @@ def apply_hard_filters(candidates: list[FusedCandidate], plan: RagQueryPlan) -> 
     required_keywords = filters.get("required_keywords") or []
     forbidden_keywords = filters.get("forbidden_keywords") or []
     budget_max = filters.get("budget_max")
-    party_size = int(filters.get("party_size") or 1)
     allowed_source_types = set(plan.source_types) if plan.source_types else None
 
     kept = []
@@ -28,12 +27,12 @@ def apply_hard_filters(candidates: list[FusedCandidate], plan: RagQueryPlan) -> 
             continue
         if exclude_allergens:
             allergens = facts.get("allergens")
-            if allergens is None or any(item in set(allergens) for item in exclude_allergens):
+            if allergens and any(item in set(allergens) for item in exclude_allergens):
                 continue
         if merchant_name and facts.get("merchant_name") != merchant_name:
             continue
         if budget_max is not None and facts.get("price") is not None:
-            if float(facts["price"]) * party_size > float(budget_max):
+            if float(facts["price"]) > float(budget_max):
                 continue
         if cuisine_types:
             cuisine = str(facts.get("cuisine_type") or "")

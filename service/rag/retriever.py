@@ -94,12 +94,14 @@ class AdvancedRagRetriever:
         filtered = apply_hard_filters(fused, plan)
         logger.debug("RAG filter: %d candidates after hard filters (removed %d)", len(filtered), len(fused) - len(filtered))
 
+        rerank_query = plan.normalized_query or original_query
+
         # Cross-encoder reranking (after hard filters, before weighted rerank)
         if len(filtered) > 3:
-            filtered = self.cross_encoder.rerank(original_query, filtered, top_k=min(20, len(filtered)))
+            filtered = self.cross_encoder.rerank(rerank_query, filtered, top_k=min(20, len(filtered)))
             logger.debug("RAG cross-encoder: %d candidates after reranking", len(filtered))
 
-        ranked = self.reranker.rerank(filtered, original_query=original_query, query_plan=plan, memories=memories or [])
+        ranked = self.reranker.rerank(filtered, original_query=rerank_query, query_plan=plan, memories=memories or [])
         ranked = self._apply_result_ordering(ranked, plan)
 
         merchant_scoped = bool(plan.must_filters.get("merchant_name"))

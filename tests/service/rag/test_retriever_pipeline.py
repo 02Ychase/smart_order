@@ -105,3 +105,56 @@ def test_retriever_applies_price_desc_and_limit_after_recall() -> None:
 
     assert len(evidence) == 1
     assert evidence[0].facts["dish_name"] == "剁椒鱼块"
+
+
+def test_cross_encoder_and_reranker_receive_normalized_query() -> None:
+    """Cross-encoder and weighted reranker should receive normalized_query, not the raw multi-step original."""
+    from service.rag.models import RecallCandidate
+
+    candidates = [
+        RecallCandidate(
+            stable_key=f"dish:{i}",
+            source_type="dish",
+            source_id=i,
+            route="dense",
+            rank=i,
+            score=1.0 - i * 0.1,
+            facts={"dish_id": i, "dish_name": f"川菜{i}", "merchant_id": 1, "merchant_name": "A", "price": 30.0, "cuisine_type": "川菜", "is_available": True},
+            citation=f"川菜{i}",
+        )
+        for i in range(1, 6)
+    ]
+
+    retriever = AdvancedRagRetriever(recall_routes=[StubRecallRoute(candidates)])
+
+    captured_queries: dict[str, str] = {}
+    orig_ce_rerank = retriever.cross_encoder.rerank
+    orig_wr_rerank = retriever.reranker.rerank
+
+    def spy_ce_rerank(query, *a, **kw):
+        captured_queries["cross_encoder"] = query
+        return orig_ce_rerank(query, *a, **kw)
+
+    def spy_wr_rerank(*a, original_query=None, **kw):
+        captured_queries["reranker"] = original_query
+        return orig_wr_rerank(*a, original_query=original_query, **kw)
+
+    retriever.cross_encoder.rerank = spy_ce_rerank
+    retriever.reranker.rerank = spy_wr_rerank
+
+    agent_plan = AgentPlan(
+        intent="recommendation",
+        normalized_query="川菜推荐",
+        requires_rag=True,
+        filters={"cuisine_types": ["川菜"]},
+    )
+
+    retriever.retrieve(
+        "推荐几个川菜，再帮我加入购物车",
+        agent_plan,
+        memories=[],
+        limit=5,
+    )
+
+    assert captured_queries["cross_encoder"] == "川菜推荐"
+    assert captured_queries["reranker"] == "川菜推荐"
