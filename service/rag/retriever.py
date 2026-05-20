@@ -18,6 +18,7 @@ from service.rag.diversifier import diversify
 from service.rag.filters import apply_hard_filters
 from service.rag.fusion import reciprocal_rank_fusion
 from service.rag.models import FusedCandidate, RagEvidence
+from service.rag.tracing import PipelineTrace, RagEvalOptions, TraceItem
 from service.rag.query_planner import RagQueryPlanner
 from service.rag.recall import BusinessRecallRoute, DenseVectorRecallRoute, SparseVectorRecallRoute, SqlCatalogRecallRoute
 from service.rag.reranker import WeightedReranker
@@ -65,8 +66,12 @@ class AdvancedRagRetriever:
         memories: list[dict] | None = None,
         limit: int = 5,
         max_limit: int | None = None,
+        trace: PipelineTrace | None = None,
+        eval_options: RagEvalOptions | None = None,
     ) -> list[RagEvidence]:
         from service.observability import MetricsCollector
+        pipeline_start = time.perf_counter()
+
         collector = MetricsCollector()
         collector.set_metadata("query", original_query)
 
@@ -76,37 +81,100 @@ class AdvancedRagRetriever:
         plan = self.query_planner.plan(original_query, agent_plan, memories or [])
         output_limit = self._output_limit(plan, default=limit, max_limit=effective_max)
 
-        cache_key = self._cache_key(plan, memories, output_limit)
-        cached = self._cache_get(cache_key)
-        if cached is not None:
-            logger.debug("RAG cache hit: key=%s", cache_key[:32])
-            collector.increment("rag.cache_hit")
-            collector.emit("rag_retrieve")
-            return [self._dict_to_evidence(item) for item in cached]
+        skip_cache = eval_options.disable_cache if eval_options else False
+        cache_key = ""
+        if not skip_cache:
+            cache_key = self._cache_key(plan, memories, output_limit)
+            cached = self._cache_get(cache_key)
+            if cached is not None:
+                logger.debug("RAG cache hit: key=%s", cache_key[:32])
+                if trace is not None:
+                    trace.cache_hit = True
+                collector.increment("rag.cache_hit")
+                collector.emit("rag_retrieve")
+                return [self._dict_to_evidence(item) for item in cached]
 
-        route_results = self._parallel_recall(plan, limit=50)
+        # --- Recall ---
+        t0 = time.perf_counter()
+        recall_with_timings = self._parallel_recall(plan, limit=50)
+        parallel_elapsed = (time.perf_counter() - t0) * 1000
+        route_results = [r for r, _ in recall_with_timings]
         recall_counts = [len(r) for r in route_results]
         logger.debug("RAG recall: routes=%d, counts=%s, query=%s", len(route_results), recall_counts, plan.normalized_query)
 
+        if trace is not None:
+            trace.parallel_recall_total_ms = parallel_elapsed
+            for route, (results, route_ms) in zip(self.recall_routes, recall_with_timings):
+                route_name = type(route).__name__
+                trace.recall_per_route[route_name] = [
+                    TraceItem(key=c.stable_key, score=c.score) for c in results
+                ]
+                trace.recall_per_route_latency_ms[route_name] = route_ms
+
+        # --- Fusion ---
+        t0 = time.perf_counter()
         fused = reciprocal_rank_fusion(route_results, limit=50)
+        fusion_elapsed = (time.perf_counter() - t0) * 1000
         logger.debug("RAG fusion: %d candidates after RRF", len(fused))
 
+        if trace is not None:
+            trace.fusion_latency_ms = fusion_elapsed
+            trace.after_fusion = [TraceItem(key=c.stable_key, score=c.final_score) for c in fused]
+
+        # --- Hard filter ---
+        t0 = time.perf_counter()
         filtered = apply_hard_filters(fused, plan)
+        filter_elapsed = (time.perf_counter() - t0) * 1000
         logger.debug("RAG filter: %d candidates after hard filters (removed %d)", len(filtered), len(fused) - len(filtered))
+
+        if trace is not None:
+            trace.filter_latency_ms = filter_elapsed
+            trace.after_hard_filter = [TraceItem(key=c.stable_key, score=c.final_score) for c in filtered]
 
         rerank_query = plan.normalized_query or original_query
 
-        # Cross-encoder reranking (after hard filters, before weighted rerank)
-        if len(filtered) > 3:
+        # --- Cross-encoder ---
+        skip_ce = eval_options.skip_cross_encoder if eval_options else False
+        if not skip_ce and len(filtered) > 3:
+            t0 = time.perf_counter()
             filtered = self.cross_encoder.rerank(rerank_query, filtered, top_k=min(20, len(filtered)))
+            ce_elapsed = (time.perf_counter() - t0) * 1000
             logger.debug("RAG cross-encoder: %d candidates after reranking", len(filtered))
 
-        ranked = self.reranker.rerank(filtered, original_query=rerank_query, query_plan=plan, memories=memories or [])
+            if trace is not None:
+                trace.cross_encoder_latency_ms = ce_elapsed
+                trace.after_cross_encoder = [
+                    TraceItem(key=c.stable_key, score=c.cross_encoder_score) for c in filtered
+                ]
+
+        # --- Weighted rerank ---
+        skip_wr = eval_options.skip_weighted_rerank if eval_options else False
+        if not skip_wr:
+            t0 = time.perf_counter()
+            ranked = self.reranker.rerank(filtered, original_query=rerank_query, query_plan=plan, memories=memories or [])
+            wr_elapsed = (time.perf_counter() - t0) * 1000
+
+            if trace is not None:
+                trace.weighted_rerank_latency_ms = wr_elapsed
+                trace.after_weighted_rerank = [
+                    TraceItem(key=c.stable_key, score=c.final_score) for c in ranked
+                ]
+        else:
+            ranked = filtered
+
         ranked = self._apply_result_ordering(ranked, plan)
 
+        # --- Diversify ---
         merchant_scoped = bool(plan.must_filters.get("merchant_name"))
+        t0 = time.perf_counter()
         diversified = diversify(ranked, limit=output_limit, merchant_scoped=merchant_scoped)
+        div_elapsed = (time.perf_counter() - t0) * 1000
         logger.debug("RAG diversify: %d candidates after diversity (limit=%d)", len(diversified), output_limit)
+
+        if trace is not None:
+            trace.diversify_latency_ms = div_elapsed
+            trace.after_diversify = [TraceItem(key=c.stable_key, score=c.final_score) for c in diversified]
+            trace.total_latency_ms = (time.perf_counter() - pipeline_start) * 1000
 
         collector.set_metadata("recall_counts", recall_counts)
         collector.set_metadata("after_fusion", len(fused))
@@ -115,8 +183,9 @@ class AdvancedRagRetriever:
         collector.emit("rag_retrieve")
 
         evidence_list = [self._to_evidence(item) for item in diversified]
-        serialized = [self._evidence_to_dict(e) for e in evidence_list]
-        self._cache_set(cache_key, serialized)
+        if not skip_cache:
+            serialized = [self._evidence_to_dict(e) for e in evidence_list]
+            self._cache_set(cache_key, serialized)
         return evidence_list
 
     def _cache_key(self, plan, memories: list[dict] | None = None, output_limit: int = 5) -> str:
@@ -181,7 +250,7 @@ class AdvancedRagRetriever:
                 _rag_cache[key] = (time.monotonic(), data)
 
     @traceable(name="parallel_recall")
-    def _parallel_recall(self, plan, limit: int) -> list[list]:
+    def _parallel_recall(self, plan, limit: int) -> list[tuple[list, float]]:
         cfg = get_config().rag
 
         if not cfg.parallel_recall or len(self.recall_routes) <= 1:
@@ -200,20 +269,23 @@ class AdvancedRagRetriever:
                 )
             return [f.result() for f in futures]
 
-    def _sequential_recall(self, plan, limit: int) -> list[list]:
+    def _sequential_recall(self, plan, limit: int) -> list[tuple[list, float]]:
         """Fallback sequential recall (used when parallel_recall=False)."""
-        results: list[list] = []
+        results: list[tuple[list, float]] = []
         for route in self.recall_routes:
+            t0 = time.perf_counter()
             try:
                 result = route.recall(plan, limit)
-                results.append(result)
+                elapsed = (time.perf_counter() - t0) * 1000
+                results.append((result, elapsed))
                 logger.debug("RAG recall route %s returned %d candidates", route.__class__.__name__, len(result))
             except Exception as e:
+                elapsed = (time.perf_counter() - t0) * 1000
                 logger.warning("RAG recall route %s failed: %s", route.__class__.__name__, e)
-                results.append([])
+                results.append(([], elapsed))
         return results
 
-    def _run_single_route(self, route, plan, limit: int) -> list:
+    def _run_single_route(self, route, plan, limit: int) -> tuple[list, float]:
         """Execute one recall route in a worker thread.
 
         If the route declares ``requires_db_session = True`` and a
@@ -232,26 +304,31 @@ class AdvancedRagRetriever:
         if needs_own_session and getattr(route, "_built", False):
             needs_own_session = False
 
+        t0 = time.perf_counter()
         if needs_own_session:
             session = self._session_factory()
             try:
                 route_instance = route.__class__(CatalogService(session))
                 result = route_instance.recall(plan, limit)
+                elapsed = (time.perf_counter() - t0) * 1000
                 logger.debug("RAG recall route %s returned %d candidates", route.__class__.__name__, len(result))
-                return result
+                return result, elapsed
             except Exception as e:
+                elapsed = (time.perf_counter() - t0) * 1000
                 logger.warning("RAG recall route %s failed: %s", route.__class__.__name__, e)
-                return []
+                return [], elapsed
             finally:
                 session.close()
         else:
             try:
                 result = route.recall(plan, limit)
+                elapsed = (time.perf_counter() - t0) * 1000
                 logger.debug("RAG recall route %s returned %d candidates", route.__class__.__name__, len(result))
-                return result
+                return result, elapsed
             except Exception as e:
+                elapsed = (time.perf_counter() - t0) * 1000
                 logger.warning("RAG recall route %s failed: %s", route.__class__.__name__, e)
-                return []
+                return [], elapsed
 
     @staticmethod
     def _evidence_to_dict(evidence: RagEvidence) -> dict[str, Any]:
