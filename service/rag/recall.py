@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import logging
 import math
 
 from langsmith import traceable
 
+try:
+    import jieba as _jieba_module
+except ImportError:  # pragma: no cover
+    _jieba_module = None  # type: ignore[assignment]
+
+logger = logging.getLogger(__name__)
+
 from service.catalog_service import CatalogService
+from service.config import get_config
 from service.rag.models import RagQueryPlan, RecallCandidate
 from tools.assistant_vector_store import AssistantVectorStore
 
@@ -254,26 +263,29 @@ class BusinessRecallRoute:
 
 
 class SparseVectorRecallRoute:
-    """BM25 sparse-vector recall that activates the reranker's lexical_score weight.
+    """BM25 sparse-vector recall with inverted index and jieba segmentation.
 
-    Indexes dish/merchant names, descriptions, and categories using character
-    bigrams (effective for Chinese without a segmenter).  Scores documents with
-    the BM25 ranking function.
+    Uses *jieba* with a domain-specific dictionary (dish names, merchant
+    names, ingredients, tags) for tokenization.  Character unigrams are
+    appended as fallback so partial / abbreviated queries still match.
+    Falls back to character bigrams when jieba is not installed.
+
+    Multiple expansion queries are merged via RRF (consistent with
+    DenseVectorRecallRoute).
     """
 
     requires_db_session: bool = True
 
-    _BM25_K1: float = 1.2
-    _BM25_B: float = 0.75
-
     def __init__(self, catalog_service: CatalogService) -> None:
         self.catalog_service = catalog_service
         self._docs: list[dict] = []
-        self._doc_tokens: list[list[str]] = []
         self._doc_lengths: list[int] = []
-        self._avgdl: float = 0.0 #文档平均长度
-        self._df: dict[str, int] = {} #记录每个token的文档频次（在多少个文档中出现过）
+        self._avgdl: float = 0.0
+        self._df: dict[str, int] = {}
+        self._tf: list[dict[str, int]] = []           # tf[doc_idx][token] = count
+        self._inverted: dict[str, list[int]] = {}      # token → [doc_idx, ...]
         self._N: int = 0
+        self._tokenizer = None                         # jieba.Tokenizer (built in build_index)
         self._built: bool = False
 
     # ── index ────────────────────────────────────────────────────────
@@ -282,7 +294,9 @@ class SparseVectorRecallRoute:
         """Build in-memory BM25 index from all catalog data."""
         docs: list[dict] = []
 
-        for merchant in self.catalog_service.list_merchants():
+        merchants = self.catalog_service.list_merchants()
+
+        for merchant in merchants:
             docs.append({
                 "text": self._merchant_text(merchant),
                 "source_type": "merchant",
@@ -296,7 +310,7 @@ class SparseVectorRecallRoute:
                 "citation": merchant.get("description", ""),
             })
 
-        for merchant in self.catalog_service.list_merchants():
+        for merchant in merchants:
             for dish in self.catalog_service.list_dishes_by_merchant(merchant["id"]):
                 docs.append({
                     "text": self._dish_text(dish),
@@ -315,24 +329,33 @@ class SparseVectorRecallRoute:
                 })
 
         if not docs:
-            self._docs, self._doc_tokens, self._doc_lengths = [], [], []
+            self._docs, self._doc_lengths = [], []
+            self._tf, self._inverted = [], {}
             self._N, self._avgdl, self._df = 0, 0.0, {}
+            self._tokenizer = self._build_tokenizer([])
             self._built = True
             return
 
         self._docs = docs
-        # 对文档进行分词
-        self._doc_tokens = [self._tokenize(d["text"]) for d in docs]
-        # 计算每个文档的长度（分词后的token数量）
-        self._doc_lengths = [len(t) for t in self._doc_tokens]
+        self._tokenizer = self._build_tokenizer(docs)
+        doc_tokens = [self._tokenize(d["text"]) for d in docs]
+        self._doc_lengths = [len(t) for t in doc_tokens]
         self._N = len(docs)
         self._avgdl = sum(self._doc_lengths) / max(self._N, 1)
 
+        # Precompute DF, TF, and inverted index in a single pass.
         self._df = {}
-        # 记录每个token的文档频次（在多少个文档中出现过）
-        for tokens in self._doc_tokens:
-            for token in set(tokens):
-                self._df[token] = self._df.get(token, 0) + 1
+        self._tf = []
+        self._inverted = {}
+
+        for doc_idx, tokens in enumerate(doc_tokens):
+            tf_dict: dict[str, int] = {}
+            for t in tokens:
+                tf_dict[t] = tf_dict.get(t, 0) + 1
+            self._tf.append(tf_dict)
+            for t in set(tokens):
+                self._df[t] = self._df.get(t, 0) + 1
+                self._inverted.setdefault(t, []).append(doc_idx)
 
         self._built = True
 
@@ -347,83 +370,173 @@ class SparseVectorRecallRoute:
             return []
 
         source_types = set(plan.source_types)
-        queries = list(plan.expansion_queries) if plan.expansion_queries else [plan.normalized_query]
+        queries = list(dict.fromkeys(
+            q for q in (plan.expansion_queries or [plan.normalized_query]) if q
+        ))
         if not queries:
             return []
 
+        # Each query → independent ranked candidate list, then RRF merge.
+        num_searches = len(queries)
+        per_query = math.ceil(limit / max(num_searches, 1))
 
-        doc_scores: list[float] = [0.0] * self._N #每个文档的分数，初始为0.0
-        doc_tokens_cache = [self._tokenize(q) for q in queries] #所有query分词后的结果
+        sub_results: list[list[RecallCandidate]] = []
+        for query in queries:
+            sub_results.append(self._bm25_query(query, source_types, per_query))
 
-        for query_tokens in doc_tokens_cache:
-            if not query_tokens:
+        return self._rrf_merge(sub_results, limit)
+
+    def _bm25_query(
+        self, query: str, source_types: set[str], top_k: int,
+    ) -> list[RecallCandidate]:
+        """Score documents matching a single query via inverted index."""
+        query_tokens = self._tokenize(query)
+        if not query_tokens:
+            return []
+
+        cfg = get_config().rag
+        k1, b = cfg.bm25_k1, cfg.bm25_b
+
+        # Collect candidate doc indices from inverted index.
+        candidate_docs: set[int] = set()
+        for token in query_tokens:
+            if token in self._inverted:
+                candidate_docs.update(self._inverted[token])
+
+        # Score only candidate documents.
+        scored: list[tuple[float, int]] = []
+        for doc_idx in candidate_docs:
+            if self._docs[doc_idx]["source_type"] not in source_types:
                 continue
-            for doc_idx, doc in enumerate(self._docs):
-                if doc["source_type"] not in source_types:
-                    continue
-                # 多个query只取最高分的那个
-                score = self._bm25_score(query_tokens, doc_idx)
-                if score > doc_scores[doc_idx]:
-                    doc_scores[doc_idx] = score
+            score = self._bm25_score(query_tokens, doc_idx, k1, b)
+            if score > 0:
+                scored.append((score, doc_idx))
 
-        max_score = max(doc_scores) if doc_scores else 0.0
-        if max_score > 0:
-            doc_scores = [s / max_score for s in doc_scores]
+        scored.sort(key=lambda item: item[0], reverse=True)
 
-        indexed = [(score, idx) for idx, score in enumerate(doc_scores) if score > 0]
-        indexed.sort(key=lambda item: item[0], reverse=True)
-
+        max_score = scored[0][0] if scored else 0.0
         candidates: list[RecallCandidate] = []
-        for rank, (score, doc_idx) in enumerate(indexed[:limit], 1):
+        for rank, (score, doc_idx) in enumerate(scored[:top_k], 1):
             doc = self._docs[doc_idx]
+            normalized = score / max_score if max_score > 0 else 0.0
             candidates.append(RecallCandidate(
                 stable_key=f"{doc['source_type']}:{doc['source_id']}",
                 source_type=doc["source_type"],
                 source_id=doc["source_id"],
                 route="sparse",
                 rank=rank,
-                score=score,
+                score=normalized,
                 facts=dict(doc["facts"]),
                 citation=doc["citation"],
             ))
         return candidates
 
     # ── scoring ─────────────────────────────────────────────────────
-    # 简单理解：query 里的词，如果在某个菜品文档中出现，并且这个词不是所有文档都有的泛词，那么这个菜品分数更高
-    def _bm25_score(self, query_tokens: list[str], doc_idx: int) -> float:
+
+    def _bm25_score(
+        self, query_tokens: list[str], doc_idx: int,
+        k1: float, b: float,
+    ) -> float:
         """BM25 with Robertson-Sparck Jones smoothed IDF."""
-        # 获取当前文档的长度和分词结果
         doc_len = self._doc_lengths[doc_idx]
-        doc_tokens = self._doc_tokens[doc_idx]
+        tf_dict = self._tf[doc_idx]
         score = 0.0
 
         for token in query_tokens:
-            # 计算query中的token在所有文档中出现的次数
             df = self._df.get(token, 0)
             if df == 0:
                 continue
-            # 计算IDF，使用Robertson-Sparck Jones平滑方法，避免极端值
-            # 一个词出现的文档越少，它越稀有，IDF 越高，对分数贡献越大。
             idf = math.log((self._N - df + 0.5) / (df + 0.5) + 1.0)
-            # 计算TF，当前 query token 在当前文档中出现了多少次。
-            tf = doc_tokens.count(token)
-            # tf 越大，分数越高；但不会无限增长。
-            numerator = tf * (self._BM25_K1 + 1)
-            denominator = tf + self._BM25_K1 * (1 - self._BM25_B + self._BM25_B * doc_len / self._avgdl)
+            tf = tf_dict.get(token, 0)
+            numerator = tf * (k1 + 1)
+            denominator = tf + k1 * (1 - b + b * doc_len / self._avgdl)
             score += idf * numerator / denominator
 
         q_len = len(query_tokens)
         return score / q_len if q_len else 0.0
 
-    # ── helpers ─────────────────────────────────────────────────────
+    @staticmethod
+    def _rrf_merge(
+        sub_results: list[list[RecallCandidate]], limit: int, k: int = 60,
+    ) -> list[RecallCandidate]:
+        """RRF merge across per-query sub-results."""
+        rrf_scores: dict[str, float] = {}
+        best: dict[str, RecallCandidate] = {}
+
+        for candidates in sub_results:
+            for c in candidates:
+                rrf_scores[c.stable_key] = rrf_scores.get(c.stable_key, 0.0) + 1.0 / (k + c.rank)
+                if c.stable_key not in best or c.score > best[c.stable_key].score:
+                    best[c.stable_key] = c
+
+        sorted_keys = sorted(rrf_scores, key=lambda key: rrf_scores[key], reverse=True)
+        result: list[RecallCandidate] = []
+        for rank, key in enumerate(sorted_keys[:limit], 1):
+            candidate = best[key]
+            candidate.rank = rank
+            candidate.score = rrf_scores[key]
+            result.append(candidate)
+        return result
+
+    # ── tokenizer ───────────────────────────────────────────────────
+
+    @classmethod
+    def _build_tokenizer(cls, docs: list[dict]):
+        """Create an instance-level jieba tokenizer with domain vocabulary.
+
+        Extracts dish names, merchant names, cuisine types, flavor profiles,
+        tags, and ingredients from the loaded docs and registers them so
+        jieba keeps compound terms intact (e.g. "宫保鸡丁" as one token).
+        """
+        if _jieba_module is None:
+            return None
+
+        tokenizer = _jieba_module.Tokenizer()
+        seen: set[str] = set()
+
+        for doc in docs:
+            facts = doc.get("facts", {})
+            for key in ("dish_name", "merchant_name", "name",
+                        "cuisine_type", "flavor_profile"):
+                word = facts.get(key)
+                if word and len(word) >= 2 and word not in seen:
+                    tokenizer.add_word(word)
+                    seen.add(word)
+            for list_key in ("tags", "merchant_tags", "ingredients"):
+                for word in facts.get(list_key, []):
+                    if word and len(word) >= 2 and word not in seen:
+                        tokenizer.add_word(word)
+                        seen.add(word)
+
+        logger.debug("BM25 tokenizer: added %d domain words", len(seen))
+        return tokenizer
+
+    def _tokenize(self, text: str) -> list[str]:
+        """Tokenize with jieba (primary) + character unigrams (fallback).
+
+        Character unigrams are appended for every multi-character token so
+        that partial or abbreviated queries (e.g. "鸡丁") can still match
+        documents containing full compound terms (e.g. "宫保鸡丁").
+        """
+        if not text:
+            return []
+        if self._tokenizer is None:
+            return self._bigram_tokenize(text)
+
+        jieba_tokens = [w for w in self._tokenizer.lcut(text) if w.strip()]
+        result: list[str] = list(jieba_tokens)
+        for token in jieba_tokens:
+            if len(token) >= 2:
+                result.extend(list(token))
+        return result
 
     @staticmethod
-    def _tokenize(text: str) -> list[str]:
-        """Character bigrams — suitable for Chinese without a segmenter."""
+    def _bigram_tokenize(text: str) -> list[str]:
+        """Fallback tokenizer: character bigrams + unigrams (no jieba)."""
         if not text or len(text) < 2:
             return list(text) if text else []
         bigrams = [text[i : i + 2] for i in range(len(text) - 1)]
-        bigrams.extend(list(text))  # unigrams catch single-character queries
+        bigrams.extend(list(text))
         return bigrams
 
     @staticmethod

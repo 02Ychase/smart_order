@@ -164,7 +164,9 @@ class TestSparseVectorRecallRoute:
         candidates = route.recall(_plan("麻辣"), limit=5)
 
         if candidates:
-            assert max(c.score for c in candidates) == pytest.approx(1.0, abs=1e-9)
+            scores = [c.score for c in candidates]
+            assert all(s > 0 for s in scores), f"all scores should be positive: {scores}"
+            assert scores == sorted(scores, reverse=True), "scores should be in descending order"
 
     def test_stable_key_format(self) -> None:
         route = SparseVectorRecallRoute(StubCatalog())
