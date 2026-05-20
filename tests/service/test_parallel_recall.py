@@ -173,10 +173,12 @@ def test_parallel_and_sequential_produce_same_results() -> None:
     parallel = retriever._parallel_recall(plan, limit=50)
 
     assert len(sequential) == len(parallel) == 2
-    assert len(sequential[0]) == len(parallel[0]) == 1
-    assert len(sequential[1]) == len(parallel[1]) == 1
-    assert sequential[0][0].stable_key == parallel[0][0].stable_key
-    assert sequential[1][0].stable_key == parallel[1][0].stable_key
+    seq_results = [r for r, _ in sequential]
+    par_results = [r for r, _ in parallel]
+    assert len(seq_results[0]) == len(par_results[0]) == 1
+    assert len(seq_results[1]) == len(par_results[1]) == 1
+    assert seq_results[0][0].stable_key == par_results[0][0].stable_key
+    assert seq_results[1][0].stable_key == par_results[1][0].stable_key
 
     set_config(AppConfig())
 
@@ -233,8 +235,9 @@ def test_one_failing_route_does_not_block_others() -> None:
     result = retriever._parallel_recall(_make_plan(), limit=50)
 
     assert len(result) == 2
-    assert len(result[0]) == 1  # good route succeeded
-    assert result[1] == []      # bad route returned empty
+    results_only = [r for r, _ in result]
+    assert len(results_only[0]) == 1  # good route succeeded
+    assert results_only[1] == []      # bad route returned empty
 
     set_config(AppConfig())
 
@@ -327,7 +330,7 @@ def test_session_closed_even_when_route_fails() -> None:
     result = retriever._parallel_recall(_make_plan(), limit=50)
 
     assert len(result) == 2
-    assert result[1] == []  # failing route returns empty
+    assert result[1][0] == []  # failing route returns empty
     assert len(sessions) == 1
     sessions[0].close.assert_called_once()
 
@@ -455,8 +458,9 @@ def test_result_order_matches_route_order() -> None:
     retriever = AdvancedRagRetriever(recall_routes=[route_a, route_b, route_c])
     result = retriever._parallel_recall(_make_plan(), limit=50)
 
-    assert result[0][0].stable_key == "dish:1"
-    assert result[1][0].stable_key == "dish:2"
-    assert result[2][0].stable_key == "dish:3"
+    results_only = [r for r, _ in result]
+    assert results_only[0][0].stable_key == "dish:1"
+    assert results_only[1][0].stable_key == "dish:2"
+    assert results_only[2][0].stable_key == "dish:3"
 
     set_config(AppConfig())
