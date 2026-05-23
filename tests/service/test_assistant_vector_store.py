@@ -6,6 +6,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from service.embedding import DEFAULT_DIMENSION
 from tools.assistant_vector_store import AssistantVectorStore
 
 
@@ -32,7 +33,6 @@ def test_vector_store_is_not_ready_when_no_api_key(monkeypatch) -> None:
 def test_semantic_search_returns_candidates(monkeypatch) -> None:
     monkeypatch.setenv("PINECONE_API_KEY", "test-key")
     monkeypatch.setenv("PINECONE_ASSISTANT_INDEX", "test-index")
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-ds-key")
 
     mock_index = MagicMock()
     mock_index.query.return_value = {
@@ -54,15 +54,11 @@ def test_semantic_search_returns_candidates(monkeypatch) -> None:
     mock_pc = MagicMock()
     mock_pc.Index.return_value = mock_index
 
-    fake_embedding = [0.1] * 1536
-    mock_resp = MagicMock()
-    mock_resp.__getitem__ = lambda self, key: {"status_code": 200}[key] if key == "status_code" else None
-    mock_resp.get.side_effect = lambda key, default=None: {
-        "output": {"embeddings": [{"embedding": fake_embedding}]}
-    }.get(key, default)
+    fake_embedding = [0.1] * DEFAULT_DIMENSION
 
     with patch("tools.assistant_vector_store.Pinecone", return_value=mock_pc):
-        with patch("tools.assistant_vector_store.dashscope.TextEmbedding.call", return_value=mock_resp):
+        with patch("tools.assistant_vector_store.get_embedding_service") as mock_svc:
+            mock_svc.return_value.embed.return_value = fake_embedding
             store = AssistantVectorStore()
             results = store.semantic_search("下饭川菜", top_k=3)
 
@@ -75,14 +71,14 @@ def test_semantic_search_returns_candidates(monkeypatch) -> None:
 def test_semantic_search_returns_empty_on_embedding_failure(monkeypatch) -> None:
     monkeypatch.setenv("PINECONE_API_KEY", "test-key")
     monkeypatch.setenv("PINECONE_ASSISTANT_INDEX", "test-index")
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-ds-key")
 
     mock_index = MagicMock()
     mock_pc = MagicMock()
     mock_pc.Index.return_value = mock_index
 
     with patch("tools.assistant_vector_store.Pinecone", return_value=mock_pc):
-        with patch("tools.assistant_vector_store.dashscope.TextEmbedding.call", return_value=None):
+        with patch("tools.assistant_vector_store.get_embedding_service") as mock_svc:
+            mock_svc.return_value.embed.side_effect = RuntimeError("model not loaded")
             store = AssistantVectorStore()
             results = store.semantic_search("query", top_k=3)
 
@@ -92,18 +88,12 @@ def test_semantic_search_returns_empty_on_embedding_failure(monkeypatch) -> None
 def test_upsert_candidates_batches_vectors(monkeypatch) -> None:
     monkeypatch.setenv("PINECONE_API_KEY", "test-key")
     monkeypatch.setenv("PINECONE_ASSISTANT_INDEX", "test-index")
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-ds-key")
 
     mock_index = MagicMock()
     mock_pc = MagicMock()
     mock_pc.Index.return_value = mock_index
 
-    fake_embedding = [0.1] * 1536
-    mock_resp = MagicMock()
-    mock_resp.__getitem__ = lambda self, key: {"status_code": 200}[key] if key == "status_code" else None
-    mock_resp.get.side_effect = lambda key, default=None: {
-        "output": {"embeddings": [{"embedding": fake_embedding}]}
-    }.get(key, default)
+    fake_embedding = [0.1] * DEFAULT_DIMENSION
 
     candidates = [
         {
@@ -119,7 +109,8 @@ def test_upsert_candidates_batches_vectors(monkeypatch) -> None:
     ]
 
     with patch("tools.assistant_vector_store.Pinecone", return_value=mock_pc):
-        with patch("tools.assistant_vector_store.dashscope.TextEmbedding.call", return_value=mock_resp):
+        with patch("tools.assistant_vector_store.get_embedding_service") as mock_svc:
+            mock_svc.return_value.embed.return_value = fake_embedding
             store = AssistantVectorStore()
             store.upsert_candidates(candidates, batch_size=1)
 

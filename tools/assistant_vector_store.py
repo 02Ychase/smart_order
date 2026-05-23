@@ -1,9 +1,9 @@
 import logging
 import os
-from http import HTTPStatus
 
-import dashscope
 from pinecone import Pinecone, ServerlessSpec
+
+from service.embedding import DEFAULT_DIMENSION, get_embedding_service
 
 logger = logging.getLogger(__name__)
 
@@ -12,10 +12,8 @@ class AssistantVectorStore:
     def __init__(self, auto_create_index: bool = True) -> None:
         self.api_key = os.getenv("PINECONE_API_KEY")
         self.index_name = os.getenv("PINECONE_ASSISTANT_INDEX", "smart-order-assistant")
-        self.dashscope_api_key = os.getenv("DASHSCOPE_API_KEY")
         self.pinecone_env = os.getenv("PINECONE_ENY", "us-east-1")
-        self.dimension = 1536
-        self.embedding_model = "text-embedding-v4"
+        self.dimension = DEFAULT_DIMENSION
 
         self._client = None
         self._index = None
@@ -46,20 +44,9 @@ class AssistantVectorStore:
         return self._client is not None and self._index is not None
 
     def _embed(self, text: str) -> list[float] | None:
-        if not self.dashscope_api_key:
-            return None
         try:
-            resp = dashscope.TextEmbedding.call(
-                model=self.embedding_model,
-                input=text,
-                dimension=self.dimension,
-                api_key=self.dashscope_api_key,
-            )
-            if resp["status_code"] == HTTPStatus.OK:
-                return resp.get("output", {}).get("embeddings", [{}])[0].get("embedding")
-            else:
-                logger.error("Embedding request failed")
-                return None
+            svc = get_embedding_service()
+            return svc.embed(text)
         except Exception as e:
             logger.error(f"Embedding request failed: {e}")
             return None

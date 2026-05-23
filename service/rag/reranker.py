@@ -3,20 +3,18 @@ from __future__ import annotations
 import logging
 import math
 import os
-from http import HTTPStatus
 
-import dashscope
 from langsmith import traceable
 
 from service.cache import TieredCache
 from service.config import get_config
+from service.embedding import DEFAULT_DIMENSION, get_embedding_service
 from service.rag.models import FusedCandidate, RagQueryPlan
 
 logger = logging.getLogger(__name__)
 
-# Embedding configuration (shared with AssistantVectorStore)
-_EMBEDDING_MODEL = "text-embedding-v4"
-_EMBEDDING_DIMENSION = 1536
+# Embedding configuration
+_EMBEDDING_DIMENSION = DEFAULT_DIMENSION
 _EMBEDDING_SIMILARITY_THRESHOLD = 0.70
 _EMBEDDING_CACHE_SIZE = 2048
 
@@ -155,29 +153,19 @@ _embedding_cache = TieredCache(l1_max_size=_EMBEDDING_CACHE_SIZE)
 
 
 def _get_embedding_cached(text: str) -> tuple[float, ...] | None:
-    """Get embedding vector for text via DashScope, cached by TieredCache."""
+    """Get embedding vector for text via local model, cached by TieredCache."""
     cached = _embedding_cache.get(text)
     if cached is not None:
         return cached
 
-    api_key = os.getenv("DASHSCOPE_API_KEY")
-    if not api_key:
-        logger.warning("DASHSCOPE_API_KEY not set — embedding unavailable")
-        return None
     try:
-        resp = dashscope.TextEmbedding.call(
-            model=_EMBEDDING_MODEL,
-            input=text,
-            dimension=_EMBEDDING_DIMENSION,
-            api_key=api_key,
-        )
-        if resp["status_code"] == HTTPStatus.OK:
-            embedding = resp.get("output", {}).get("embeddings", [{}])[0].get("embedding")
-            if embedding and len(embedding) == _EMBEDDING_DIMENSION:
-                result = tuple(embedding)
-                _embedding_cache.set(text, result)
-                return result
-        logger.error(f"Embedding request failed: status={resp.get('status_code')}")
+        svc = get_embedding_service()
+        embedding = svc.embed(text)
+        if embedding and len(embedding) == _EMBEDDING_DIMENSION:
+            result = tuple(embedding)
+            _embedding_cache.set(text, result)
+            return result
+        logger.error("Embedding returned unexpected dimension: %d", len(embedding) if embedding else 0)
         return None
     except Exception as e:
         logger.error(f"Embedding request failed: {e}")
