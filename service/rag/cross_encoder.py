@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
-from http import HTTPStatus
+import threading
 
 from langsmith import traceable
 
@@ -10,10 +11,17 @@ from service.rag.models import FusedCandidate
 
 logger = logging.getLogger(__name__)
 
+# ── Singleton for local cross-encoder model ──────────────────────────────
+
+_DEFAULT_RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
+
+_reranker_lock = threading.Lock()
+_reranker_instance: _LocalCrossEncoder | None = None  # type: ignore[name-defined]
+
 
 class CrossEncoderReranker:
     def __init__(self, scorer=None) -> None:
-        self._scorer = scorer or _DashScopeReranker()
+        self._scorer = scorer or _get_local_cross_encoder()
 
     @traceable(name="cross_encoder_rerank")
     def rerank(self, query: str, candidates: list[FusedCandidate], top_k: int = 10) -> list[FusedCandidate]:
@@ -46,28 +54,73 @@ class CrossEncoderReranker:
         return " ".join(part for part in parts if part)
 
 
-class _DashScopeReranker:
-    def __init__(self):
-        import dashscope
-        self._dashscope = dashscope
-        self._api_key = os.getenv("DASHSCOPE_API_KEY")
-        self._model = "gte-rerank"
+# ── Local cross-encoder scorer ───────────────────────────────────────────
+
+
+class _LocalCrossEncoder:
+    """Scores (query, text) relevance using a local cross-encoder model.
+
+    Uses ``sentence_transformers.CrossEncoder`` to load ``BAAI/bge-reranker-v2-m3``.
+    Raw logits are passed through sigmoid to produce a score in [0, 1].
+
+    The model is loaded **lazily** on first ``score()`` call, so constructing
+    the object is cheap and won't fail in test environments without
+    the real model installed.
+    """
+
+    def __init__(self, model_name: str | None = None) -> None:
+        self.model_name = model_name or os.getenv(
+            "RERANKER_MODEL", _DEFAULT_RERANKER_MODEL
+        )
+        self._model = None
+        self._model_lock = threading.Lock()
+
+    def _ensure_model(self) -> None:
+        if self._model is not None:
+            return
+        with self._model_lock:
+            if self._model is None:
+                from sentence_transformers import CrossEncoder
+
+                self._model = CrossEncoder(self.model_name)
+                logger.info("Loaded cross-encoder model: %s", self.model_name)
 
     def score(self, query: str, text: str) -> float:
-        if not self._api_key:
-            return 0.0
-        try:
-            resp = self._dashscope.TextReRank.call(
-                model=self._model,
-                query=query,
-                documents=[text],
-                api_key=self._api_key,
-            )
-            if resp.status_code == HTTPStatus.OK:
-                results = resp.output.get("results", [])
-                if results:
-                    return float(results[0].get("relevance_score", 0.0))
-            return 0.0
-        except Exception:
-            logger.warning("DashScope rerank API call failed", exc_info=True)
-            return 0.0
+        """Return relevance score in [0, 1] for a (query, text) pair."""
+        self._ensure_model()
+        logit = self._model.predict([(query, text)])[0]
+        return _sigmoid(float(logit))
+
+    def score_batch(self, query: str, texts: list[str]) -> list[float]:
+        """Score multiple texts against a single query (more efficient)."""
+        if not texts:
+            return []
+        self._ensure_model()
+        pairs = [(query, t) for t in texts]
+        logits = self._model.predict(pairs)
+        return [_sigmoid(float(s)) for s in logits]
+
+
+def _sigmoid(x: float) -> float:
+    """Numerically stable sigmoid."""
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    exp_x = math.exp(x)
+    return exp_x / (1.0 + exp_x)
+
+
+def _get_local_cross_encoder() -> _LocalCrossEncoder:
+    """Return the module-level singleton, creating it on first call."""
+    global _reranker_instance  # noqa: PLW0603
+    if _reranker_instance is not None:
+        return _reranker_instance
+    with _reranker_lock:
+        if _reranker_instance is None:
+            _reranker_instance = _LocalCrossEncoder()
+    return _reranker_instance
+
+
+def reset_cross_encoder() -> None:
+    """Tear down the singleton (useful in tests)."""
+    global _reranker_instance  # noqa: PLW0603
+    _reranker_instance = None

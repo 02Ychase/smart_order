@@ -23,8 +23,12 @@ mysql-connector-python~=9.4.0
 # ====================== 向量数据库与云服务 ======================
 # Pinecone 向量数据库的客户端库，用于存储和检索向量嵌入（常用于AI应用）
 pinecone~=7.3.0
-# 阿里云灵积模型平台 SDK，用于调用通义千问等模型
-dashscope>=1.14.0
+
+# ====================== 本地 Embedding & Reranker 模型 ======================
+# sentence-transformers 用于加载本地模型：
+#   - Embedding:     BAAI/bge-m3          (1024 维向量)
+#   - Cross-Encoder: BAAI/bge-reranker-v2-m3 (重排序)
+sentence-transformers>=3.0.0
 
 # ====================== 中文分词 ======================
 # 结巴分词，用于 BM25 稀疏检索的中文分词

@@ -1,5 +1,16 @@
 from service.agent_runtime.state import AgentPlan
+from service.rag.cross_encoder import CrossEncoderReranker
 from service.rag.retriever import AdvancedRagRetriever
+
+
+class _StubScorer:
+    """Lightweight scorer that avoids loading the real cross-encoder model."""
+    def score(self, query: str, text: str) -> float:
+        return 0.5
+
+
+def _stub_cross_encoder() -> CrossEncoderReranker:
+    return CrossEncoderReranker(scorer=_StubScorer())
 
 
 class StubRecallRoute:
@@ -24,7 +35,7 @@ class StubRecallRoute:
 
 
 def test_retriever_returns_grounded_evidence() -> None:
-    retriever = AdvancedRagRetriever(recall_routes=[StubRecallRoute()])
+    retriever = AdvancedRagRetriever(recall_routes=[StubRecallRoute()], cross_encoder=_stub_cross_encoder())
     agent_plan = AgentPlan(
         intent="recommendation",
         normalized_query="辣的湘菜",
@@ -40,7 +51,7 @@ def test_retriever_returns_grounded_evidence() -> None:
 
 
 def test_retriever_without_session_skips_catalog_routes() -> None:
-    retriever = AdvancedRagRetriever()
+    retriever = AdvancedRagRetriever(cross_encoder=_stub_cross_encoder())
 
     route_names = [type(route).__name__ for route in retriever.recall_routes]
     assert "SqlCatalogRecallRoute" not in route_names
@@ -51,6 +62,7 @@ def test_retriever_applies_price_desc_and_limit_after_recall() -> None:
     from service.rag.models import RecallCandidate
 
     retriever = AdvancedRagRetriever(
+        cross_encoder=_stub_cross_encoder(),
         recall_routes=[
             StubRecallRoute([
                 RecallCandidate(
@@ -125,7 +137,7 @@ def test_cross_encoder_and_reranker_receive_normalized_query() -> None:
         for i in range(1, 6)
     ]
 
-    retriever = AdvancedRagRetriever(recall_routes=[StubRecallRoute(candidates)])
+    retriever = AdvancedRagRetriever(recall_routes=[StubRecallRoute(candidates)], cross_encoder=_stub_cross_encoder())
 
     captured_queries: dict[str, str] = {}
     orig_ce_rerank = retriever.cross_encoder.rerank

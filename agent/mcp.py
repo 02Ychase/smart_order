@@ -7,7 +7,7 @@ import os
 import logging
 from tools.llm_tool import call_llm
 from typing import Any, Dict
-from tools.pinecone_tool import search_menu_items_with_id
+from tools.assistant_vector_store import AssistantVectorStore
 from tools.amap_tool import check_delivery_range, PathInputMode
 
 logging.basicConfig(
@@ -118,13 +118,30 @@ def menu_inquiry(query: str) -> Dict[str, Any]:
     try:
         # 1.加载菜品信息推荐问题的提示词
         prompt_template = load_prompt_template("menu_inquiry.txt")
-        # 2.上下文（向量数据库）
-        menu_similar_result = search_menu_items_with_id(query=query)
-        if menu_similar_result and menu_similar_result["contents"]:
-            menu_contents_context = "\n".join(
-                [f"-{item}" for item in menu_similar_result["contents"]]
-            )
 
+        # 2.通过 AssistantVectorStore 进行语义检索（使用 smart-order-assistant 索引）
+        store = AssistantVectorStore(auto_create_index=False)
+        matches = store.semantic_search(query, top_k=5, namespace="dishes") if store.is_ready() else []
+
+        menu_ids: list[str] = []
+        if matches:
+            context_lines = []
+            for m in matches:
+                meta = m.get("metadata", {})
+                dish_id = meta.get("dish_id") or meta.get("source_id")
+                if dish_id:
+                    menu_ids.append(str(dish_id))
+                line = (
+                    f"菜品ID:{dish_id} "
+                    f"菜品名:{meta.get('dish_name', '')} "
+                    f"价格:{meta.get('price', '')} "
+                    f"菜系:{meta.get('cuisine_type', '')} "
+                    f"口味:{meta.get('flavor_profile', '')} "
+                    f"简介:{meta.get('description', '')}"
+                )
+                context_lines.append(f"- {line.strip()}")
+
+            menu_contents_context = "\n".join(context_lines)
             full_query = f"基于当前向量数据库中的菜品信息：\n{menu_contents_context}\n用户问题是：{query}\n请根据上述内容，给用户一个合理的回复，并且推荐相关菜品。"
         else:
             full_query = f"暂无相关菜品信息。\n用户问题是：{query}\n请根据上述内容，给出一个合理的回复，并且推荐相关菜品。"
@@ -135,9 +152,7 @@ def menu_inquiry(query: str) -> Dict[str, Any]:
         # 4.封装字典结构返回
         return {
             "recommendation": llm_response,
-            "menu_ids": menu_similar_result[
-                "ids"
-            ],  # 简单用menu_similar_result的ids充当，实际用正则表达式从llm_response中提取
+            "menu_ids": menu_ids,
         }
     except Exception as e:
         raise ToolException(f"处理菜品查询时发生错误：{e}，请稍后再试。")
