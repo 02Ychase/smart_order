@@ -58,5 +58,5 @@ docs/
 Smart Order Design System/
 .vscode/
 .gitignore
-
+tmp/
 项目面试.md
