@@ -197,13 +197,14 @@ class LangGraphAgentPlanner:
 
     def _parse_tool_calls(self, raw_calls: list[dict[str, Any]], intent: str) -> list[GraphToolCall]:
         calls: list[GraphToolCall] = []
-        seen: set[str] = set()
+        tool_name_counter: dict[str, int] = {}
+        seen_step_ids: set[str] = set()
         for item in raw_calls:
             if not isinstance(item, dict):
                 continue
             raw_name = str(item.get("tool_name") or item.get("name") or "")
             tool_name = self._normalize_tool_name(raw_name, intent)
-            if tool_name is None or tool_name in seen:
+            if tool_name is None:
                 continue
             arguments = item.get("arguments") or item.get("parameters") or {}
             if not isinstance(arguments, dict):
@@ -213,14 +214,20 @@ class LangGraphAgentPlanner:
                 writes_database = False
             if tool_name in ACTION_TOOL_NAMES | UNDO_TOOL_NAMES:
                 writes_database = True
+            count = tool_name_counter.get(tool_name, 0)
+            step_id = item.get("step_id") or f"{tool_name}_{count}"
+            if step_id in seen_step_ids:
+                continue
+            tool_name_counter[tool_name] = count + 1
+            seen_step_ids.add(step_id)
             calls.append(
                 GraphToolCall(
                     tool_name=tool_name,
                     arguments=arguments,
                     writes_database=writes_database,
+                    step_id=step_id,
                 )
             )
-            seen.add(tool_name)
         return calls
 
     @staticmethod
