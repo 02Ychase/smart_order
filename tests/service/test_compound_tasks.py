@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import HumanMessage
 
-from service.agent_runtime.nodes import _normalize_tool_result, plan_node, rag_node
+from service.agent_runtime.nodes import LocalActionExecutor, _normalize_tool_result, plan_node, rag_node
 from service.agent_runtime.planner import LangGraphAgentPlanner
 from service.agent_runtime.state import AgentPlan, GraphToolCall
 
@@ -366,3 +366,37 @@ def test_rag_node_evidence_accumulation():
     step_ids = {r["step_id"] for r in result["tool_results"]}
     assert "recommend_dishes_0" in step_ids
     assert "recommend_dishes_1" in step_ids
+
+
+def test_evidence_bridging_fallback_for_add_to_cart():
+    """When LLM omits dish_id, action executor should fall back to evidence."""
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[
+            GraphToolCall("add_to_cart", {}, True, step_id="add_to_cart_0"),  # no dish_id!
+        ],
+    )
+    state = {
+        "user_id": 1,
+        "session_id": "s1",
+        "tool_results": [],
+        "recent_evidence": [
+            {"source_type": "dish", "source_id": 12, "facts": {"dish_id": 12, "dish_name": "宫保鸡丁"}},
+            {"source_type": "dish", "source_id": 35, "facts": {"dish_id": 35, "dish_name": "水煮鱼"}},
+        ],
+    }
+    executor = LocalActionExecutor(session=None)
+
+    with patch("service.tools.cart_tool.add_to_cart_tool", return_value={"item_id": 1}) as mock_tool, \
+         patch("service.action_journal_service.ActionJournalService") as mock_journal_cls:
+        mock_journal = MagicMock()
+        mock_journal.record_completed_action.return_value = {"action_id": "act_1"}
+        mock_journal_cls.return_value = mock_journal
+
+        result = executor.execute_action(plan, state)
+
+    assert result["success"] is True
+    # The tool should have been called with dish_id=12 (first from evidence)
+    mock_tool.assert_called_once()
+    _, call_kwargs = mock_tool.call_args
+    assert call_kwargs["dish_id"] == 12

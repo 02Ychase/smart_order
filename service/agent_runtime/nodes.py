@@ -492,6 +492,23 @@ class LocalActionExecutor:
 
             dish_id = call.arguments.get("dish_id")
             quantity = call.arguments.get("quantity", 1)
+
+            # Evidence bridging fallback: if LLM omitted dish_id, pick from evidence.
+            # Use index-based mapping: the Nth pending add_to_cart maps to the Nth dish evidence.
+            if dish_id is None:
+                dish_evidence = [
+                    e for e in state.get("recent_evidence", [])
+                    if e.get("source_type") == "dish"
+                ]
+                if dish_evidence:
+                    # Count how many add_to_cart calls already completed
+                    completed_cart_count = sum(
+                        1 for r in state.get("tool_results", [])
+                        if r.get("type") == "add_to_cart" and r.get("success")
+                    )
+                    ev_index = min(completed_cart_count, len(dish_evidence) - 1)
+                    dish_id = dish_evidence[ev_index].get("facts", {}).get("dish_id")
+
             if dish_id is None:
                 return {
                     "success": False,
