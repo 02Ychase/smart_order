@@ -23,6 +23,7 @@ class GraphToolCall:
     tool_name: str
     arguments: dict[str, Any] = field(default_factory=dict)
     writes_database: bool = False
+    step_id: str = ""
 
 
 @dataclass

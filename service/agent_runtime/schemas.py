@@ -18,6 +18,7 @@ class GraphToolCallSchema(BaseModel):
     tool_name: str = Field(default="", description="Exact tool name from the available tool set")
     arguments: dict[str, Any] = Field(default_factory=dict, description="Tool arguments as key-value pairs")
     writes_database: bool = Field(default=False, description="Whether this tool writes to the database")
+    step_id: str = Field(default="", description="Optional step identifier, auto-generated if empty")
 
 
 class FiltersSchema(BaseModel):
