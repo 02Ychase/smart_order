@@ -4,8 +4,10 @@ from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import HumanMessage
 
+from service.agent_runtime.graph import build_agent_graph
 from service.agent_runtime.nodes import LocalActionExecutor, _normalize_tool_result, evaluate_node, plan_node, rag_node, respond_node
-from service.agent_runtime.planner import LangGraphAgentPlanner
+from service.agent_runtime.planner import ACTION_TOOL_NAMES, LangGraphAgentPlanner
+from service.agent_runtime.runtime import AgentRuntimeContext
 from service.agent_runtime.state import AgentPlan, GraphToolCall
 
 
@@ -523,3 +525,346 @@ def test_respond_merges_action_results_with_evidence():
     assert "宫保鸡丁" in message
     assert "已将宫保鸡丁加入购物车" in message
     assert result["response_payload"]["response_type"] == "action_completed"
+
+
+# ── Integration Test Helpers ──────────────────────────────────────────
+
+class CompoundPlanner:
+    """Planner that simulates LLM behavior for compound task testing.
+
+    First call: returns RAG plan (recommendation).
+    Subsequent calls: checks context for evidence/tool_results and returns
+    appropriate continuation plan (action).
+    """
+    def __init__(self, continuation_plan_fn=None):
+        self.call_count = 0
+        self._continuation_plan_fn = continuation_plan_fn
+
+    def plan(self, message, context):
+        self.call_count += 1
+        evidence = context.get("recent_evidence", [])
+        tool_results = context.get("tool_results", [])
+
+        if self.call_count == 1:
+            # First call: always recommend
+            return AgentPlan(
+                intent="recommendation",
+                normalized_query="川菜",
+                requires_rag=True,
+                tool_calls=[
+                    GraphToolCall("recommend_dishes", {"query": "川菜", "cuisine_types": ["川菜"]}, False, step_id="recommend_dishes_0"),
+                ],
+            )
+
+        # Subsequent calls: use continuation function
+        if self._continuation_plan_fn:
+            return self._continuation_plan_fn(self.call_count, evidence, tool_results, message)
+
+        return AgentPlan(intent="recommendation")
+
+
+class CompoundRetriever:
+    """Retriever that returns different results based on query/filters."""
+    def __init__(self, items_by_cuisine=None):
+        self._items = items_by_cuisine or {}
+        self.calls = []
+
+    def retrieve(self, query, agent_plan=None, memories=None, limit=5, **kwargs):
+        self.calls.append(query)
+        cuisine_types = (agent_plan.filters or {}).get("cuisine_types", []) if agent_plan else []
+        for cuisine in cuisine_types:
+            if cuisine in self._items:
+                return self._items[cuisine]
+        # Default: return all items from first cuisine
+        if self._items:
+            return list(self._items.values())[0]
+        return []
+
+
+class CompoundExecutor:
+    """Action executor that tracks calls."""
+    def __init__(self):
+        self.executed = []
+
+    def execute_action(self, plan, state):
+        completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
+        call = next(
+            (c for c in plan.tool_calls
+             if c.tool_name in ACTION_TOOL_NAMES and c.step_id not in completed_step_ids),
+            None,
+        )
+        if call is None:
+            return {"success": False, "message": "无操作", "undo_available": False}
+
+        dish_id = call.arguments.get("dish_id")
+        # Evidence bridging fallback
+        if dish_id is None:
+            evidence = state.get("recent_evidence", [])
+            dish_ev = [e for e in evidence if e.get("source_type") == "dish"]
+            if dish_ev:
+                dish_id = dish_ev[0].get("facts", {}).get("dish_id")
+
+        self.executed.append({"tool": call.tool_name, "step_id": call.step_id, "dish_id": dish_id})
+        return {
+            "success": True,
+            "action_id": f"act_{len(self.executed)}",
+            "message": f"已将菜品(dish_id={dish_id})加入购物车",
+            "undo_available": True,
+        }
+
+    def undo_last(self, state):
+        return {"success": False, "message": "无操作"}
+
+
+def _make_evidence_items(items_data):
+    """Create StubEvidenceItem list from simple dicts."""
+    return [
+        StubEvidenceItem(
+            source_type="dish",
+            source_id=d["dish_id"],
+            merchant_id=d.get("merchant_id", 1),
+            title=d["dish_name"],
+            facts=d,
+            why_matched=[d.get("cuisine_type", "")],
+            citation="test",
+            score=0.9,
+        )
+        for d in items_data
+    ]
+
+
+def test_integration_recommend_then_add_to_cart():
+    """E2E: '推荐几个川菜，然后加入购物车' → RAG → evaluate → plan → action → respond."""
+    sichuan_dishes = _make_evidence_items([
+        {"dish_id": 12, "dish_name": "宫保鸡丁", "price": 28.0, "merchant_name": "川味坊", "cuisine_type": "川菜", "flavor_profile": "麻辣"},
+    ])
+
+    def continuation(call_count, evidence, tool_results, message):
+        if evidence and not any(r.get("type") in ACTION_TOOL_NAMES for r in tool_results):
+            dish_id = evidence[0].get("facts", {}).get("dish_id", 12)
+            return AgentPlan(
+                intent="cart_action",
+                requires_rag=False,
+                tool_calls=[
+                    GraphToolCall("add_to_cart", {"dish_id": dish_id, "quantity": 1}, True, step_id="add_to_cart_0"),
+                ],
+            )
+        return AgentPlan(intent="cart_action")
+
+    planner = CompoundPlanner(continuation_plan_fn=continuation)
+    retriever = CompoundRetriever({"川菜": sichuan_dishes})
+    executor = CompoundExecutor()
+
+    graph = build_agent_graph()
+    runtime = AgentRuntimeContext(
+        planner=planner, retriever=retriever,
+        action_executor=executor, use_llm_response=False,
+    )
+
+    result = graph.invoke({
+        "messages": [HumanMessage(content="推荐几个川菜，然后加入购物车")],
+        "session_id": "test_compound_1",
+        "user_id": 1,
+        "loaded_user_memories": [],
+        "recent_evidence": [],
+        "recent_action_ids": [],
+        "tool_results": [],
+        "iteration_count": 0,
+        "max_iterations": 5,
+    }, config={"configurable": {"thread_id": "t1", "runtime": runtime}})
+
+    # Verify: evidence exists (RAG completed)
+    assert result.get("recent_evidence")
+    # Verify: action executed
+    assert len(executor.executed) == 1
+    assert executor.executed[0]["dish_id"] == 12
+    # Verify: response mentions both recommendation and action
+    message = result["response_payload"]["message"]
+    assert "宫保鸡丁" in message
+    assert "已将菜品" in message  # action confirmation present
+
+
+def test_integration_recommend_then_add_all_to_cart():
+    """E2E: '推荐几个川菜，然后都加入购物车' → RAG → 3× action → respond."""
+    sichuan_dishes = _make_evidence_items([
+        {"dish_id": 12, "dish_name": "宫保鸡丁", "price": 28.0, "merchant_name": "川味坊", "cuisine_type": "川菜", "flavor_profile": "麻辣"},
+        {"dish_id": 35, "dish_name": "水煮鱼", "price": 45.0, "merchant_name": "川味坊", "cuisine_type": "川菜", "flavor_profile": "辣"},
+        {"dish_id": 7, "dish_name": "干煸四季豆", "price": 18.0, "merchant_name": "川味坊", "cuisine_type": "川菜", "flavor_profile": "咸"},
+    ])
+
+    def continuation(call_count, evidence, tool_results, message):
+        if evidence and not any(r.get("type") in ACTION_TOOL_NAMES for r in tool_results):
+            # Generate one add_to_cart per dish
+            calls = []
+            for idx, e in enumerate(evidence):
+                if e.get("source_type") == "dish":
+                    did = e.get("facts", {}).get("dish_id")
+                    calls.append(GraphToolCall("add_to_cart", {"dish_id": did, "quantity": 1}, True, step_id=f"add_to_cart_{idx}"))
+            return AgentPlan(intent="cart_action", requires_rag=False, tool_calls=calls)
+        return AgentPlan(intent="cart_action")
+
+    planner = CompoundPlanner(continuation_plan_fn=continuation)
+    retriever = CompoundRetriever({"川菜": sichuan_dishes})
+    executor = CompoundExecutor()
+
+    graph = build_agent_graph()
+    runtime = AgentRuntimeContext(
+        planner=planner, retriever=retriever,
+        action_executor=executor, use_llm_response=False,
+    )
+
+    result = graph.invoke({
+        "messages": [HumanMessage(content="推荐几个川菜，然后都加入购物车")],
+        "session_id": "test_compound_2",
+        "user_id": 1,
+        "loaded_user_memories": [],
+        "recent_evidence": [],
+        "recent_action_ids": [],
+        "tool_results": [],
+        "iteration_count": 0,
+        "max_iterations": 10,  # Allow enough iterations for 3 actions
+    }, config={"configurable": {"thread_id": "t2", "runtime": runtime}})
+
+    # All 3 dishes should have been added to cart
+    assert len(executor.executed) == 3
+    executed_dish_ids = {e["dish_id"] for e in executor.executed}
+    assert executed_dish_ids == {12, 35, 7}
+    # Each should have unique step_id
+    executed_step_ids = {e["step_id"] for e in executor.executed}
+    assert len(executed_step_ids) == 3
+
+
+def test_integration_multi_cuisine_rag():
+    """E2E: '推荐一个川菜，再推荐一个湘菜' → RAG(川菜) → RAG(湘菜) → respond."""
+    sichuan = _make_evidence_items([
+        {"dish_id": 12, "dish_name": "宫保鸡丁", "price": 28.0, "merchant_name": "川味坊", "cuisine_type": "川菜", "flavor_profile": "麻辣"},
+    ])
+    hunan = _make_evidence_items([
+        {"dish_id": 20, "dish_name": "剁椒鱼头", "price": 58.0, "merchant_name": "湘味馆", "cuisine_type": "湘菜", "flavor_profile": "辣"},
+    ])
+
+    class MultiCuisinePlanner:
+        def __init__(self):
+            self.call_count = 0
+
+        def plan(self, message, context):
+            self.call_count += 1
+            if self.call_count == 1:
+                # Path A: LLM decomposes into two RAG calls upfront
+                return AgentPlan(
+                    intent="recommendation",
+                    normalized_query="川菜和湘菜",
+                    requires_rag=True,
+                    tool_calls=[
+                        GraphToolCall("recommend_dishes", {"query": "川菜", "cuisine_types": ["川菜"], "limit": 1}, False, step_id="recommend_dishes_0"),
+                        GraphToolCall("recommend_dishes", {"query": "湘菜", "cuisine_types": ["湘菜"], "limit": 1}, False, step_id="recommend_dishes_1"),
+                    ],
+                )
+            return AgentPlan(intent="recommendation")
+
+    planner = MultiCuisinePlanner()
+    retriever = CompoundRetriever({"川菜": sichuan, "湘菜": hunan})
+    executor = CompoundExecutor()
+
+    graph = build_agent_graph()
+    runtime = AgentRuntimeContext(
+        planner=planner, retriever=retriever,
+        action_executor=executor, use_llm_response=False,
+    )
+
+    result = graph.invoke({
+        "messages": [HumanMessage(content="推荐一个川菜，再推荐一个湘菜")],
+        "session_id": "test_compound_3",
+        "user_id": 1,
+        "loaded_user_memories": [],
+        "recent_evidence": [],
+        "recent_action_ids": [],
+        "tool_results": [],
+        "iteration_count": 0,
+        "max_iterations": 5,
+    }, config={"configurable": {"thread_id": "t3", "runtime": runtime}})
+
+    # Evidence should contain both cuisines
+    evidence = result.get("recent_evidence", [])
+    cuisine_types = {e.get("facts", {}).get("cuisine_type") for e in evidence}
+    assert "川菜" in cuisine_types
+    assert "湘菜" in cuisine_types
+    # Two retrieval calls made
+    assert len(retriever.calls) == 2
+    # Response mentions both dishes
+    message = result["response_payload"]["message"]
+    assert "宫保鸡丁" in message
+    assert "剁椒鱼头" in message
+
+
+def test_integration_multi_cuisine_path_b_replan():
+    """E2E Path B: LLM only generates one RAG call, evaluate detects missing cuisine → re-plan → second RAG."""
+    sichuan = _make_evidence_items([
+        {"dish_id": 12, "dish_name": "宫保鸡丁", "price": 28.0, "merchant_name": "川味坊", "cuisine_type": "川菜", "flavor_profile": "麻辣"},
+    ])
+    hunan = _make_evidence_items([
+        {"dish_id": 20, "dish_name": "剁椒鱼头", "price": 58.0, "merchant_name": "湘味馆", "cuisine_type": "湘菜", "flavor_profile": "辣"},
+    ])
+
+    class PathBPlanner:
+        """First call: only Sichuan RAG. Second call (after evaluate triggers re-plan): Hunan RAG."""
+        def __init__(self):
+            self.call_count = 0
+
+        def plan(self, message, context):
+            self.call_count += 1
+            if self.call_count == 1:
+                # Only generate ONE RAG call — intentionally incomplete
+                return AgentPlan(
+                    intent="recommendation",
+                    normalized_query="川菜",
+                    requires_rag=True,
+                    tool_calls=[
+                        GraphToolCall("recommend_dishes", {"query": "川菜", "cuisine_types": ["川菜"], "limit": 1}, False, step_id="recommend_dishes_0"),
+                    ],
+                )
+            # Second call: evaluate detected missing 湘菜 → generate second RAG call
+            return AgentPlan(
+                intent="recommendation",
+                normalized_query="湘菜",
+                requires_rag=True,
+                tool_calls=[
+                    GraphToolCall("recommend_dishes", {"query": "湘菜", "cuisine_types": ["湘菜"], "limit": 1}, False, step_id="recommend_dishes_1"),
+                ],
+            )
+
+    planner = PathBPlanner()
+    retriever = CompoundRetriever({"川菜": sichuan, "湘菜": hunan})
+    executor = CompoundExecutor()
+
+    graph = build_agent_graph()
+    runtime = AgentRuntimeContext(
+        planner=planner, retriever=retriever,
+        action_executor=executor, use_llm_response=False,
+    )
+
+    result = graph.invoke({
+        "messages": [HumanMessage(content="推荐一个川菜，再推荐一个湘菜")],
+        "session_id": "test_compound_4",
+        "user_id": 1,
+        "loaded_user_memories": [],
+        "recent_evidence": [],
+        "recent_action_ids": [],
+        "tool_results": [],
+        "iteration_count": 0,
+        "max_iterations": 5,
+    }, config={"configurable": {"thread_id": "t4", "runtime": runtime}})
+
+    # Planner should have been called twice (initial + continuation after evaluate)
+    assert planner.call_count == 2
+    # Evidence should contain both cuisines
+    evidence = result.get("recent_evidence", [])
+    cuisine_types = {e.get("facts", {}).get("cuisine_type") for e in evidence}
+    assert "川菜" in cuisine_types
+    assert "湘菜" in cuisine_types
+    # Two retrieval calls made
+    assert len(retriever.calls) == 2
+    # Response mentions both dishes
+    message = result["response_payload"]["message"]
+    assert "宫保鸡丁" in message
+    assert "剁椒鱼头" in message
