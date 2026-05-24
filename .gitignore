@@ -64,3 +64,5 @@ Smart Order Design System/
 tmp/
 
 .codegraph/
+
+langsmith/
