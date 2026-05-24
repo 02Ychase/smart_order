@@ -398,20 +398,39 @@ def route_after_evaluate(state: dict) -> str:
 
 
 def _build_call_scoped_plan(plan, call_args):
-    """Create a shallow copy of plan with filters overridden by a specific tool_call's arguments.
+    """Create a shallow copy of plan with filters scoped to a specific tool_call.
 
-    This allows each RAG sub-task to search with its own cuisine/flavor/keyword constraints
-    rather than the plan-level filters.
+    IMPORTANT: When multiple RAG calls exist, plan-level filters are the UNION of
+    all calls' arguments (merged by _merge_read_tool_arguments). We must NOT inherit
+    plan-level list filters that don't belong to THIS call. For list-type filter keys,
+    we use ONLY what call_args provides (defaulting to empty). For scalar keys, we
+    fall back to the plan-level value since scalars don't suffer from cross-call leakage.
     """
     import copy
     scoped = copy.copy(plan)
-    filters = dict(plan.filters or {})
+    plan_filters = dict(plan.filters or {})
 
-    for key in ("cuisine_types", "flavor_preferences", "required_keywords",
-                "forbidden_keywords", "exclude_allergens", "source_types",
-                "limit", "sort_by", "price_preference", "budget_max"):
+    # List-type keys: use ONLY call_args value, default to empty list.
+    # This prevents cross-call leakage (e.g. required_keywords:["咖啡"] leaking into a 川菜 query).
+    _LIST_FILTER_KEYS = (
+        "cuisine_types", "flavor_preferences", "required_keywords",
+        "forbidden_keywords", "exclude_allergens", "source_types",
+    )
+    # Scalar keys: fall back to plan-level if call_args doesn't specify.
+    _SCALAR_FILTER_KEYS = ("limit", "sort_by", "price_preference", "budget_max")
+
+    filters = {}
+    for key in _LIST_FILTER_KEYS:
         if key in call_args and call_args[key] is not None:
             filters[key] = call_args[key]
+        else:
+            filters[key] = []
+
+    for key in _SCALAR_FILTER_KEYS:
+        if key in call_args and call_args[key] is not None:
+            filters[key] = call_args[key]
+        else:
+            filters[key] = plan_filters.get(key)
 
     if call_args.get("query"):
         scoped.normalized_query = call_args["query"]
