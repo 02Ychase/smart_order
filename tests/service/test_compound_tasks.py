@@ -1,6 +1,10 @@
 """Tests for ReAct compound task enhancements."""
 
-from service.agent_runtime.nodes import _normalize_tool_result
+from unittest.mock import MagicMock, patch
+
+from langchain_core.messages import HumanMessage
+
+from service.agent_runtime.nodes import _normalize_tool_result, plan_node
 from service.agent_runtime.planner import LangGraphAgentPlanner
 from service.agent_runtime.state import AgentPlan, GraphToolCall
 
@@ -84,3 +88,122 @@ def test_completed_tools_by_step_id_not_tool_name():
     assert len(remaining) == 1
     assert remaining[0].step_id == "add_to_cart_1"
     assert remaining[0].arguments["dish_id"] == 35
+
+
+def test_plan_reuse_on_pending_calls():
+    """When current plan has pending (not-yet-completed) calls, plan_node should reuse it."""
+    original_plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[
+            GraphToolCall("add_to_cart", {"dish_id": 12}, True, step_id="add_to_cart_0"),
+            GraphToolCall("add_to_cart", {"dish_id": 35}, True, step_id="add_to_cart_1"),
+        ],
+    )
+    state = {
+        "messages": [HumanMessage(content="把川菜都加入购物车")],
+        "current_plan": original_plan,
+        "tool_results": [
+            {"type": "add_to_cart", "step_id": "add_to_cart_0", "success": True, "message": "done", "data": {}},
+        ],
+        "session_id": "s1",
+        "user_id": 1,
+        "loaded_user_memories": [],
+        "recent_action_ids": [],
+        "iteration_count": 0,
+        "recent_evidence": [],
+        "last_recommendations": [],
+    }
+
+    mock_planner = MagicMock()
+    mock_runtime = MagicMock()
+    mock_runtime.planner = mock_planner
+
+    with patch("service.agent_runtime.nodes.get_runtime", return_value=mock_runtime):
+        result = plan_node(state)
+
+    assert result["current_plan"] is original_plan
+    mock_planner.plan.assert_not_called()
+
+
+def test_plan_replan_when_all_calls_completed():
+    """When all calls are completed, plan_node should call LLM for re-planning."""
+    original_plan = AgentPlan(
+        intent="recommendation",
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "川菜"}, False, step_id="recommend_dishes_0"),
+        ],
+    )
+    state = {
+        "messages": [HumanMessage(content="推荐几个川菜然后加入购物车")],
+        "current_plan": original_plan,
+        "tool_results": [
+            {"type": "recommend_dishes", "step_id": "recommend_dishes_0", "success": True, "message": "done", "data": {}},
+        ],
+        "session_id": "s1",
+        "user_id": 1,
+        "loaded_user_memories": [],
+        "recent_action_ids": [],
+        "iteration_count": 1,
+        "recent_evidence": [{"source_type": "dish", "facts": {"dish_id": 12}}],
+        "last_recommendations": [],
+    }
+
+    new_plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[GraphToolCall("add_to_cart", {"dish_id": 12}, True, step_id="add_to_cart_0")],
+    )
+    mock_planner = MagicMock()
+    mock_planner.plan.return_value = new_plan
+    mock_runtime = MagicMock()
+    mock_runtime.planner = mock_planner
+
+    with patch("service.agent_runtime.nodes.get_runtime", return_value=mock_runtime):
+        result = plan_node(state)
+
+    assert result["current_plan"] is new_plan
+    mock_planner.plan.assert_called_once()
+
+
+def test_replan_deconflicts_step_ids():
+    """When re-planning, new step_ids must not collide with already-completed ones."""
+    original_plan = AgentPlan(
+        intent="recommendation",
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "川菜"}, False, step_id="recommend_dishes_0"),
+        ],
+    )
+    state = {
+        "messages": [HumanMessage(content="推荐一个川菜，再推荐一个湘菜")],
+        "current_plan": original_plan,
+        "tool_results": [
+            {"type": "recommend_dishes", "step_id": "recommend_dishes_0", "success": True, "message": "done", "data": {}},
+        ],
+        "session_id": "s1",
+        "user_id": 1,
+        "loaded_user_memories": [],
+        "recent_action_ids": [],
+        "iteration_count": 1,
+        "recent_evidence": [{"source_type": "dish", "source_id": 12, "facts": {"dish_id": 12, "cuisine_type": "川菜"}}],
+        "last_recommendations": [],
+    }
+
+    # LLM returns a new plan with step_id that WOULD collide (recommend_dishes_0)
+    colliding_plan = AgentPlan(
+        intent="recommendation",
+        requires_rag=True,
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "湘菜", "cuisine_types": ["湘菜"]}, False, step_id="recommend_dishes_0"),
+        ],
+    )
+    mock_planner = MagicMock()
+    mock_planner.plan.return_value = colliding_plan
+    mock_runtime = MagicMock()
+    mock_runtime.planner = mock_planner
+
+    with patch("service.agent_runtime.nodes.get_runtime", return_value=mock_runtime):
+        result = plan_node(state)
+
+    returned_plan = result["current_plan"]
+    # step_id should have been reassigned to avoid collision
+    assert returned_plan.tool_calls[0].step_id != "recommend_dishes_0"
+    assert returned_plan.tool_calls[0].step_id == "recommend_dishes_1"

@@ -179,6 +179,19 @@ def _format_recent_turns(messages: list, max_turns: int = 3) -> str:
 
 
 def plan_node(state: dict, config: RunnableConfig | None = None) -> dict:
+    # Reuse current plan if it still has pending (uncompleted) calls.
+    # This prevents step_id collision from counter-reset on re-planning.
+    current_plan = state.get("current_plan")
+    if current_plan and current_plan.tool_calls:
+        completed_step_ids = {
+            r.get("step_id") or r.get("type", "")
+            for r in state.get("tool_results", [])
+        }
+        pending = [c for c in current_plan.tool_calls if c.step_id not in completed_step_ids]
+        if pending:
+            return {"current_plan": current_plan}
+
+    # All calls completed (or no plan) — call LLM for (re-)planning
     runtime = get_runtime(config)
     planner = (runtime.planner if runtime else None) or _get_default_planner()
 
@@ -198,7 +211,27 @@ def plan_node(state: dict, config: RunnableConfig | None = None) -> dict:
             "last_recommendations": state.get("last_recommendations", []),
         },
     )
+
+    # De-conflict step_ids: re-plan generates step_ids from counter=0,
+    # which may collide with already-completed step_ids in tool_results.
+    used_step_ids = {
+        r.get("step_id") or r.get("type", "")
+        for r in state.get("tool_results", [])
+    }
+    _deconflict_step_ids(plan, used_step_ids)
+
     return {"current_plan": plan}
+
+
+def _deconflict_step_ids(plan, used_step_ids: set[str]) -> None:
+    """Reassign any step_id in plan.tool_calls that collides with used_step_ids."""
+    for call in plan.tool_calls:
+        if call.step_id in used_step_ids:
+            suffix = 0
+            while f"{call.tool_name}_{suffix}" in used_step_ids:
+                suffix += 1
+            call.step_id = f"{call.tool_name}_{suffix}"
+            used_step_ids.add(call.step_id)
 
 
 # ── Cached default planner (module-level singleton) ─────────────────
