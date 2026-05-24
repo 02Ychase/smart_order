@@ -207,3 +207,40 @@ def test_replan_deconflicts_step_ids():
     # step_id should have been reassigned to avoid collision
     assert returned_plan.tool_calls[0].step_id != "recommend_dishes_0"
     assert returned_plan.tool_calls[0].step_id == "recommend_dishes_1"
+
+
+def test_build_human_input_injects_evidence():
+    context = {
+        "recent_evidence": [
+            {
+                "source_type": "dish",
+                "facts": {"dish_id": 12, "dish_name": "宫保鸡丁", "merchant_name": "川味坊", "price": 28.0, "cuisine_type": "川菜", "flavor_profile": "麻辣"},
+            },
+        ],
+        "tool_results": [],
+    }
+    result = LangGraphAgentPlanner._build_human_input("加入购物车", context)
+    assert "## 本轮已检索到的结果" in result
+    assert "宫保鸡丁" in result
+    assert "dish_id=12" in result
+
+
+def test_build_human_input_injects_tool_results():
+    context = {
+        "recent_evidence": [],
+        "tool_results": [
+            {"type": "add_to_cart", "step_id": "add_to_cart_0", "success": True, "message": "已将宫保鸡丁加入购物车"},
+        ],
+    }
+    result = LangGraphAgentPlanner._build_human_input("还有吗", context)
+    assert "## 本轮已完成的操作" in result
+    assert "add_to_cart_0" in result
+    assert "成功" in result
+
+
+def test_build_human_input_no_injection_when_empty():
+    context = {"recent_evidence": [], "tool_results": []}
+    result = LangGraphAgentPlanner._build_human_input("推荐几个川菜", context)
+    assert "## 本轮已检索到的结果" not in result
+    assert "## 本轮已完成的操作" not in result
+    assert "推荐几个川菜" in result

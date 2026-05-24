@@ -87,9 +87,9 @@ class LangGraphAgentPlanner:
 
     @staticmethod
     def _build_human_input(user_message: str, context: dict[str, Any]) -> str:
-        """Build composite human message that includes conversation history
-        and last recommendations so both structured and fallback LLM paths
-        receive the same multi-turn context."""
+        """Build composite human message that includes conversation history,
+        last recommendations, and ReAct observation context so both structured
+        and fallback LLM paths receive the same multi-turn context."""
         parts: list[str] = []
 
         conversation_history = context.get("conversation_history", "")
@@ -110,6 +110,40 @@ class LangGraphAgentPlanner:
                     line += f" {price}元"
                 rec_lines.append(line)
             parts.append("## 上一轮推荐结果\n" + "\n".join(rec_lines))
+
+        # ReAct observation: evidence from completed RAG calls
+        recent_evidence = context.get("recent_evidence", [])
+        if recent_evidence:
+            evidence_lines = []
+            for idx, item in enumerate(recent_evidence, 1):
+                facts = item.get("facts", {})
+                source_type = item.get("source_type", "")
+                if source_type == "dish":
+                    line = (
+                        f"{idx}. {facts.get('dish_name', '')} "
+                        f"(dish_id={facts.get('dish_id', '')}, "
+                        f"商家={facts.get('merchant_name', '')}, "
+                        f"{facts.get('price', '')}元, "
+                        f"{facts.get('cuisine_type', '')}/{facts.get('flavor_profile', '')})"
+                    )
+                else:
+                    line = (
+                        f"{idx}. {facts.get('merchant_name', facts.get('name', ''))} "
+                        f"(merchant_id={facts.get('merchant_id', facts.get('id', ''))})"
+                    )
+                evidence_lines.append(line)
+            parts.append("## 本轮已检索到的结果\n" + "\n".join(evidence_lines))
+
+        # ReAct observation: completed tool actions
+        tool_results = context.get("tool_results", [])
+        if tool_results:
+            result_lines = []
+            for r in tool_results:
+                status = "成功" if r.get("success") else "失败"
+                result_lines.append(
+                    f"- {r.get('step_id', r.get('type', ''))}: {status} - {r.get('message', '')}"
+                )
+            parts.append("## 本轮已完成的操作\n" + "\n".join(result_lines))
 
         parts.append(f"## 用户最新消息\n{user_message}")
         return "\n\n".join(parts)
