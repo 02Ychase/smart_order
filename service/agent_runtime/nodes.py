@@ -283,6 +283,66 @@ def route_after_plan(state: dict) -> str:
     return "respond"
 
 
+# ── Unfulfilled intent detection ─────────────────────────────────────
+
+_ACTION_INTENT_MAPPING = {
+    "add_to_cart": ["加入购物车", "加购物车", "加到购物车", "都加入", "加购", "买"],
+    "remove_from_cart": ["移除", "从购物车删", "去掉"],
+    "cart_clear": ["清空购物车", "全部删除"],
+    "upsert_preference": ["记住", "偏好", "不吃", "过敏"],
+    "save_address": ["保存地址", "加入地址"],
+}
+
+_COMPOUND_QUERY_MARKERS = ["再推荐", "再来", "还要", "另外推荐", "还推荐", "同时推荐"]
+
+_CUISINE_KEYWORDS = {
+    "川菜": "川菜", "湘菜": "湘菜", "粤菜": "粤菜", "日料": "日韩料理",
+    "韩餐": "日韩料理", "西餐": "西餐", "火锅": "火锅", "烧烤": "烧烤",
+    "咖啡": "咖啡甜品", "甜品": "咖啡甜品", "轻食": "轻食",
+}
+
+
+def _has_unfulfilled_intent(state: dict) -> bool:
+    return _has_unfulfilled_action_intent(state) or _has_unfulfilled_retrieval_intent(state)
+
+
+def _has_unfulfilled_action_intent(state: dict) -> bool:
+    user_message = latest_user_message(state)
+    completed_action_tools = {
+        r.get("type", "")
+        for r in state.get("tool_results", [])
+        if r.get("success", False) and r.get("type", "") in ACTION_TOOL_NAMES
+    }
+    for tool_name, keywords in _ACTION_INTENT_MAPPING.items():
+        if any(kw in user_message for kw in keywords):
+            if tool_name not in completed_action_tools:
+                return True
+    return False
+
+
+def _has_unfulfilled_retrieval_intent(state: dict) -> bool:
+    user_message = latest_user_message(state)
+
+    if not any(marker in user_message for marker in _COMPOUND_QUERY_MARKERS):
+        return False
+
+    mentioned = set()
+    for keyword, cuisine in _CUISINE_KEYWORDS.items():
+        if keyword in user_message:
+            mentioned.add(cuisine)
+
+    if len(mentioned) < 2:
+        return False
+
+    evidence = state.get("recent_evidence", [])
+    covered = {
+        e.get("facts", {}).get("cuisine_type", "")
+        for e in evidence
+        if e.get("source_type") == "dish"
+    }
+    return not mentioned.issubset(covered)
+
+
 def evaluate_node(state: dict) -> dict:
     iteration = state.get("iteration_count", 0) + 1
     max_iter = state.get("max_iterations", 5)
@@ -321,6 +381,10 @@ def evaluate_node(state: dict) -> dict:
     has_tool_results = bool(state.get("tool_results"))
 
     if has_evidence or has_tool_results:
+        # Check for unfulfilled follow-up intent before going to respond
+        if _has_unfulfilled_intent(state):
+            logger.debug("Agent evaluate: unfulfilled intent detected → plan (continuation)")
+            return {"iteration_count": iteration, "_next": "plan", "metrics": existing_metrics}
         logger.debug("Agent evaluate: all steps done → respond")
         return {"iteration_count": iteration, "_next": "respond", "metrics": existing_metrics}
 

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import HumanMessage
 
-from service.agent_runtime.nodes import LocalActionExecutor, _normalize_tool_result, plan_node, rag_node
+from service.agent_runtime.nodes import LocalActionExecutor, _normalize_tool_result, evaluate_node, plan_node, rag_node
 from service.agent_runtime.planner import LangGraphAgentPlanner
 from service.agent_runtime.state import AgentPlan, GraphToolCall
 
@@ -400,3 +400,79 @@ def test_evidence_bridging_fallback_for_add_to_cart():
     mock_tool.assert_called_once()
     _, call_kwargs = mock_tool.call_args
     assert call_kwargs["dish_id"] == 12
+
+
+def test_unfulfilled_action_intent_triggers_replan():
+    """User said '加入购物车' but no add_to_cart completed → re-plan."""
+    plan = AgentPlan(
+        intent="recommendation",
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "川菜"}, False, step_id="recommend_dishes_0"),
+        ],
+    )
+    state = {
+        "messages": [HumanMessage(content="推荐几个川菜，然后加入购物车")],
+        "current_plan": plan,
+        "tool_results": [
+            {"type": "recommend_dishes", "step_id": "recommend_dishes_0", "success": True, "message": "done", "data": {}},
+        ],
+        "recent_evidence": [
+            {"source_type": "dish", "source_id": 12, "facts": {"dish_id": 12}},
+        ],
+        "iteration_count": 0,
+        "max_iterations": 5,
+        "metrics": {},
+    }
+    result = evaluate_node(state)
+    assert result["_next"] == "plan"
+
+
+def test_fulfilled_action_intent_goes_to_respond():
+    """User said '加入购物车' and add_to_cart succeeded → respond."""
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[
+            GraphToolCall("add_to_cart", {"dish_id": 12}, True, step_id="add_to_cart_0"),
+        ],
+    )
+    state = {
+        "messages": [HumanMessage(content="推荐几个川菜，然后加入购物车")],
+        "current_plan": plan,
+        "tool_results": [
+            {"type": "recommend_dishes", "step_id": "recommend_dishes_0", "success": True, "message": "done", "data": {}},
+            {"type": "add_to_cart", "step_id": "add_to_cart_0", "success": True, "message": "done", "data": {}},
+        ],
+        "recent_evidence": [
+            {"source_type": "dish", "source_id": 12, "facts": {"dish_id": 12}},
+        ],
+        "iteration_count": 1,
+        "max_iterations": 5,
+        "metrics": {},
+    }
+    result = evaluate_node(state)
+    assert result["_next"] == "respond"
+
+
+def test_unfulfilled_retrieval_intent_multi_cuisine():
+    """User asked for 川菜+湘菜, but evidence only covers 川菜 → re-plan."""
+    plan = AgentPlan(
+        intent="recommendation",
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "川菜"}, False, step_id="recommend_dishes_0"),
+        ],
+    )
+    state = {
+        "messages": [HumanMessage(content="推荐一个川菜，再推荐一个湘菜")],
+        "current_plan": plan,
+        "tool_results": [
+            {"type": "recommend_dishes", "step_id": "recommend_dishes_0", "success": True, "message": "done", "data": {}},
+        ],
+        "recent_evidence": [
+            {"source_type": "dish", "source_id": 12, "facts": {"dish_id": 12, "cuisine_type": "川菜"}},
+        ],
+        "iteration_count": 0,
+        "max_iterations": 5,
+        "metrics": {},
+    }
+    result = evaluate_node(state)
+    assert result["_next"] == "plan"
