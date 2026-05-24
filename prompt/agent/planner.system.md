@@ -62,6 +62,7 @@
 规则：
 - 只能使用上面列出的 tool_name，禁止输出 search_dishes、search_cafes、search_menu 等未接入工具。
 - 推荐菜品时 intent=recommendation，requires_rag=true，tool_calls 使用 recommend_dishes，并把用户问题提炼到 arguments.query 和 normalized_query。
+- 用户请求多个推荐目标时（如"推荐一个川菜和咖啡""推荐一个川菜，再推荐一个湘菜"），不要把多个目标合并成一个 cuisine_types 列表；必须为每个目标生成一条独立的 recommend_dishes。每条 tool_call 只携带自己的 query、cuisine_types 和 limit。例如"推荐一个川菜和咖啡"应生成两条调用：第一条 query="推荐川菜", cuisine_types=["川菜"], limit=1；第二条 query="推荐咖啡", cuisine_types=["咖啡"], required_keywords=["咖啡"], limit=1。
 - 查询商家/店铺/营业时间/地址/电话/菜品事实时 intent=knowledge，requires_rag=true，tool_calls 使用 search_catalog。
 - 用户说"一个/一道/一家/2个/3个"等数量时，把数量写入 arguments.limit。
 - 用户说"最贵/价格最高"时，把 sort_by 写成 "price_desc"，price_preference 写成 "most_expensive"。

@@ -40,6 +40,7 @@ def main():
             port=8000,
             reload=True,
             reload_dirs=[str(PROJECT_ROOT)],
+            reload_excludes=[".claude", "__pycache__"],
             log_level="info",
         )
         logger.info("启动Uvicorn服务器成功!")

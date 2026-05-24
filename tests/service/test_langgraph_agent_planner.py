@@ -100,6 +100,43 @@ def test_planner_extracts_limit_and_price_sort_from_user_message() -> None:
     assert plan.filters["price_preference"] == "most_expensive"
 
 
+def test_planner_splits_compound_recommendation_into_scoped_rag_calls() -> None:
+    planner = LangGraphAgentPlanner()
+    planner._structured_llm = StubStructuredLLM(
+        AgentPlanSchema(
+            intent="recommendation",
+            normalized_query="推荐川菜和咖啡",
+            requires_rag=True,
+            filters=FiltersSchema(cuisine_types=["川菜", "咖啡"], limit=2),
+            tool_calls=[
+                GraphToolCallSchema(
+                    tool_name="recommend_dishes",
+                    arguments={
+                        "query": "推荐川菜和咖啡",
+                        "cuisine_types": ["川菜", "咖啡"],
+                        "limit": 2,
+                    },
+                    writes_database=False,
+                )
+            ],
+            should_answer_directly=True,
+            response_hint="用户同时需要川菜和咖啡两个方向的推荐，各推荐1个即可。",
+        )
+    )
+
+    plan = planner.plan("推荐一个川菜和咖啡", {})
+
+    assert plan.requires_rag is True
+    assert [call.step_id for call in plan.tool_calls] == [
+        "recommend_dishes_0",
+        "recommend_dishes_1",
+    ]
+    assert [call.arguments["query"] for call in plan.tool_calls] == ["推荐川菜", "推荐咖啡"]
+    assert [call.arguments["cuisine_types"] for call in plan.tool_calls] == [["川菜"], ["咖啡"]]
+    assert [call.arguments["limit"] for call in plan.tool_calls] == [1, 1]
+    assert plan.tool_calls[1].arguments["required_keywords"] == ["咖啡"]
+
+
 def test_planner_normalizes_hallucinated_cafe_search_tool_to_catalog_tool() -> None:
     planner = LangGraphAgentPlanner()
     planner._structured_llm = StubStructuredLLM(

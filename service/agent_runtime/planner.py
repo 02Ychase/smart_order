@@ -30,6 +30,7 @@ SEARCH_TOOL_ALIASES = {
     "search_stores": "search_catalog",
 }
 COUNT_PATTERN = re.compile(r"(\d+)\s*(?:个|道|份|款|家)")
+COFFEE_TARGETS = {"咖啡", "咖啡甜品"}
 
 
 class LangGraphAgentPlanner:
@@ -323,7 +324,113 @@ class LangGraphAgentPlanner:
             filters["sort_by"] = "price_asc"
             filters["price_preference"] = "least_expensive"
         plan.filters = filters
+        self._split_compound_recommendation_calls(plan, requested_limit=limit)
+        self._apply_requested_limit_to_rag_calls(plan, requested_limit=limit)
         return plan
+
+    def _split_compound_recommendation_calls(
+        self,
+        plan: AgentPlan,
+        *,
+        requested_limit: int | None = None,
+    ) -> None:
+        if plan.intent != "recommendation":
+            return
+
+        if plan.tool_calls:
+            if len(plan.tool_calls) != 1 or plan.tool_calls[0].tool_name != "recommend_dishes":
+                return
+            base_args = dict(plan.tool_calls[0].arguments or {})
+        else:
+            if not plan.requires_rag:
+                return
+            base_args = {"query": plan.normalized_query}
+
+        targets = self._target_list(
+            base_args.get("cuisine_types")
+            or base_args.get("cuisine_type")
+            or base_args.get("cuisine")
+            or (plan.filters or {}).get("cuisine_types")
+        )
+        if len(targets) < 2:
+            return
+
+        per_target_limit = self._compound_target_limit(
+            requested_limit=requested_limit,
+            raw_limit=base_args.get("limit") or (plan.filters or {}).get("limit"),
+            target_count=len(targets),
+        )
+
+        common_args = dict(base_args)
+        for key in ("query", "cuisine_types", "cuisine_type", "cuisine", "limit"):
+            common_args.pop(key, None)
+
+        split_calls: list[GraphToolCall] = []
+        for idx, target in enumerate(targets):
+            arguments = dict(common_args)
+            arguments["query"] = f"推荐{target}"
+            arguments["cuisine_types"] = [target]
+            if per_target_limit is not None:
+                arguments["limit"] = per_target_limit
+            if target in COFFEE_TARGETS:
+                required_keywords = self._target_list(arguments.get("required_keywords"))
+                if "咖啡" not in required_keywords:
+                    required_keywords.append("咖啡")
+                arguments["required_keywords"] = required_keywords
+
+            split_calls.append(
+                GraphToolCall(
+                    tool_name="recommend_dishes",
+                    arguments=arguments,
+                    writes_database=False,
+                    step_id=f"recommend_dishes_{idx}",
+                )
+            )
+
+        plan.tool_calls = split_calls
+
+    @staticmethod
+    def _apply_requested_limit_to_rag_calls(
+        plan: AgentPlan,
+        *,
+        requested_limit: int | None,
+    ) -> None:
+        if requested_limit is None:
+            return
+        rag_calls = [call for call in plan.tool_calls if call.tool_name in RAG_TOOL_NAMES]
+        if len(rag_calls) < 2:
+            return
+        for call in rag_calls:
+            call.arguments.setdefault("limit", requested_limit)
+
+    @staticmethod
+    def _target_list(value: Any) -> list[str]:
+        if value in (None, "", []):
+            return []
+        values = value if isinstance(value, list) else [value]
+        targets: list[str] = []
+        for item in values:
+            target = str(item).strip()
+            if target and target not in targets:
+                targets.append(target)
+        return targets
+
+    @staticmethod
+    def _compound_target_limit(
+        *,
+        requested_limit: int | None,
+        raw_limit: Any,
+        target_count: int,
+    ) -> int | None:
+        if requested_limit is not None:
+            return requested_limit
+        try:
+            total_limit = int(raw_limit)
+        except (TypeError, ValueError):
+            return None
+        if total_limit <= target_count:
+            return 1
+        return max(1, (total_limit + target_count - 1) // target_count)
 
     @staticmethod
     def _extract_requested_limit(user_message: str) -> int | None:
