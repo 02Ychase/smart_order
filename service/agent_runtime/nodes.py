@@ -224,14 +224,15 @@ def plan_node(state: dict, config: RunnableConfig | None = None) -> dict:
 
 
 def _deconflict_step_ids(plan, used_step_ids: set[str]) -> None:
-    """Reassign any step_id in plan.tool_calls that collides with used_step_ids."""
+    """Reassign any step_id in plan.tool_calls that collides with used_step_ids,
+    or is empty (e.g. from _rule_plan which doesn't set step_id)."""
     for call in plan.tool_calls:
-        if call.step_id in used_step_ids:
+        if not call.step_id or call.step_id in used_step_ids:
             suffix = 0
             while f"{call.tool_name}_{suffix}" in used_step_ids:
                 suffix += 1
             call.step_id = f"{call.tool_name}_{suffix}"
-            used_step_ids.add(call.step_id)
+        used_step_ids.add(call.step_id)
 
 
 # ── Cached default planner (module-level singleton) ─────────────────
@@ -845,7 +846,10 @@ def respond_node(state: dict, config: RunnableConfig | None = None) -> dict:
             output_result = OutputGuardrail().check(message, evidence)
             if not output_result.allowed:
                 logger.warning("Output guardrail triggered: %s, falling back to template", output_result.reason)
-                message = _template_recommendation(recommendations)
+                message = _append_action_confirmations(
+                    _template_recommendation(recommendations),
+                    tool_results,
+                )
 
     payload = {
         "session_id": state.get("session_id"),

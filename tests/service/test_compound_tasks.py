@@ -211,6 +211,22 @@ def test_replan_deconflicts_step_ids():
     assert returned_plan.tool_calls[0].step_id == "recommend_dishes_1"
 
 
+def test_deconflict_assigns_step_id_when_empty():
+    """_rule_plan creates GraphToolCall without step_id; _deconflict should assign one."""
+    from service.agent_runtime.nodes import _deconflict_step_ids
+
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[
+            GraphToolCall("add_to_cart", {"dish_id": 12}, True, step_id=""),
+        ],
+    )
+    used_step_ids: set[str] = set()
+    _deconflict_step_ids(plan, used_step_ids)
+    assert plan.tool_calls[0].step_id == "add_to_cart_0"
+    assert "add_to_cart_0" in used_step_ids
+
+
 def test_build_human_input_injects_evidence():
     context = {
         "recent_evidence": [
