@@ -53,8 +53,7 @@ Thumbs.db
 CLAUDE.md
 opencode.json
 notes/
-docs/*
-!docs/superpowers/
+docs/
 
 Smart Order Design System/
 .vscode/
