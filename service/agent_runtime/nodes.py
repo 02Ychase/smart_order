@@ -332,6 +332,29 @@ def route_after_evaluate(state: dict) -> str:
     return state.get("_next", "respond")
 
 
+def _build_call_scoped_plan(plan, call_args):
+    """Create a shallow copy of plan with filters overridden by a specific tool_call's arguments.
+
+    This allows each RAG sub-task to search with its own cuisine/flavor/keyword constraints
+    rather than the plan-level filters.
+    """
+    import copy
+    scoped = copy.copy(plan)
+    filters = dict(plan.filters or {})
+
+    for key in ("cuisine_types", "flavor_preferences", "required_keywords",
+                "forbidden_keywords", "exclude_allergens", "source_types",
+                "limit", "sort_by", "price_preference", "budget_max"):
+        if key in call_args and call_args[key] is not None:
+            filters[key] = call_args[key]
+
+    if call_args.get("query"):
+        scoped.normalized_query = call_args["query"]
+
+    scoped.filters = filters
+    return scoped
+
+
 def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
     from service.config import get_config
 
@@ -340,12 +363,42 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
 
     rag_cfg = get_config().rag
     plan = state["current_plan"]
-    # Use normalized_query from planner (which understands multi-turn context)
-    # instead of raw user_message which may be "再来几个" without context.
-    effective_query = plan.normalized_query or latest_user_message(state)
+
+    # Find the NEXT pending RAG call (single-step execution)
+    completed_step_ids = {
+        r.get("step_id") or r.get("type", "")
+        for r in state.get("tool_results", [])
+    }
+    next_rag_call = next(
+        (c for c in plan.tool_calls
+         if c.tool_name in RAG_TOOL_NAMES and c.step_id not in completed_step_ids),
+        None,
+    )
+
+    if next_rag_call is None:
+        # Fallback: plan has requires_rag but no explicit RAG tool_calls.
+        # Use plan's normalized_query directly (backward compatible).
+        if plan.requires_rag and not any(r.get("type", "") in RAG_TOOL_NAMES for r in state.get("tool_results", [])):
+            effective_query = plan.normalized_query or latest_user_message(state)
+            call_plan = plan
+            synthetic_step_id = "recommend_dishes_0"
+        else:
+            return {}  # No pending RAG call
+    else:
+        # Use this call's arguments to determine retrieval parameters
+        call_args = next_rag_call.arguments or {}
+        effective_query = (
+            call_args.get("query")
+            or plan.normalized_query
+            or latest_user_message(state)
+        )
+        # Build a scoped plan with this call's filters
+        call_plan = _build_call_scoped_plan(plan, call_args)
+        synthetic_step_id = next_rag_call.step_id
+
     evidence = retriever.retrieve(
         effective_query,
-        agent_plan=plan,
+        agent_plan=call_plan,
         memories=state.get("loaded_user_memories", []),
         limit=rag_cfg.output_limit_default,
         max_limit=rag_cfg.output_limit_max,
@@ -364,20 +417,26 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
         for item in evidence
     ]
 
-    # Mark RAG tool calls as completed to prevent re-execution loops
-    existing_results = list(state.get("tool_results", []))
-    completed_step_ids = {r.get("step_id") or r.get("type", "") for r in existing_results}
-    for call in plan.tool_calls:
-        if call.tool_name in RAG_TOOL_NAMES and call.step_id not in completed_step_ids:
-            existing_results.append({
-                "type": call.tool_name,
-                "step_id": call.step_id,
-                "success": True,
-                "message": f"检索到 {len(serialized)} 条结果",
-                "data": {},
-            })
+    # Evidence accumulation — append, don't replace
+    existing_evidence = list(state.get("recent_evidence", []))
+    seen_keys = {(e.get("source_type"), e.get("source_id")) for e in existing_evidence}
+    for item in serialized:
+        key = (item["source_type"], item["source_id"])
+        if key not in seen_keys:
+            existing_evidence.append(item)
+            seen_keys.add(key)
 
-    return {"recent_evidence": serialized, "tool_results": existing_results}
+    # Mark only THIS step complete
+    existing_results = list(state.get("tool_results", []))
+    existing_results.append({
+        "type": next_rag_call.tool_name if next_rag_call else "recommend_dishes",
+        "step_id": synthetic_step_id,
+        "success": True,
+        "message": f"检索到 {len(serialized)} 条结果",
+        "data": {},
+    })
+
+    return {"recent_evidence": existing_evidence, "tool_results": existing_results}
 
 
 class LocalActionExecutor:

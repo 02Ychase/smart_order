@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import HumanMessage
 
-from service.agent_runtime.nodes import _normalize_tool_result, plan_node
+from service.agent_runtime.nodes import _normalize_tool_result, plan_node, rag_node
 from service.agent_runtime.planner import LangGraphAgentPlanner
 from service.agent_runtime.state import AgentPlan, GraphToolCall
 
@@ -244,3 +244,125 @@ def test_build_human_input_no_injection_when_empty():
     assert "## 本轮已检索到的结果" not in result
     assert "## 本轮已完成的操作" not in result
     assert "推荐几个川菜" in result
+
+
+# ── RAG single-step execution tests ─────────────────────────────────
+
+class StubEvidenceItem:
+    """Mimics the return type of retriever.retrieve()."""
+    def __init__(self, source_type, source_id, merchant_id, title, facts, why_matched, citation, score):
+        self.source_type = source_type
+        self.source_id = source_id
+        self.merchant_id = merchant_id
+        self.title = title
+        self.facts = facts
+        self.why_matched = why_matched
+        self.citation = citation
+        self.score = score
+
+
+class FakeRetriever:
+    """Returns fixed evidence; records calls for assertions."""
+    def __init__(self, items):
+        self.items = items
+        self.calls = []
+
+    def retrieve(self, query, agent_plan=None, memories=None, limit=5, **kwargs):
+        self.calls.append({"query": query, "plan_filters": dict(agent_plan.filters) if agent_plan else {}})
+        return self.items
+
+
+def _make_rag_runtime(retriever):
+    """Helper to create a mock runtime with a given retriever."""
+    mock_runtime = MagicMock()
+    mock_runtime.retriever = retriever
+    return mock_runtime
+
+
+def test_rag_node_single_step_execution():
+    """rag_node should only execute the NEXT pending RAG call, not all of them."""
+    plan = AgentPlan(
+        intent="recommendation",
+        normalized_query="川菜",
+        requires_rag=True,
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "川菜", "cuisine_types": ["川菜"]}, False, step_id="recommend_dishes_0"),
+            GraphToolCall("recommend_dishes", {"query": "湘菜", "cuisine_types": ["湘菜"]}, False, step_id="recommend_dishes_1"),
+        ],
+    )
+    sichuan_item = StubEvidenceItem(
+        "dish", 12, 1, "宫保鸡丁",
+        {"dish_id": 12, "dish_name": "宫保鸡丁", "cuisine_type": "川菜", "price": 28.0, "merchant_name": "川味坊", "flavor_profile": "麻辣"},
+        ["川菜"], "经典川菜", 0.9,
+    )
+    retriever = FakeRetriever([sichuan_item])
+    state = {
+        "current_plan": plan,
+        "tool_results": [],
+        "recent_evidence": [],
+        "loaded_user_memories": [],
+        "messages": [HumanMessage(content="推荐一个川菜，再推荐一个湘菜")],
+    }
+
+    runtime = _make_rag_runtime(retriever)
+    with patch("service.agent_runtime.nodes.get_runtime", return_value=runtime), \
+         patch("service.config.get_config") as mock_cfg:
+        mock_cfg.return_value.rag.output_limit_default = 5
+        mock_cfg.return_value.rag.output_limit_max = 10
+        result = rag_node(state)
+
+    # Should only mark recommend_dishes_0 complete
+    completed_step_ids = {r["step_id"] for r in result["tool_results"]}
+    assert "recommend_dishes_0" in completed_step_ids
+    assert "recommend_dishes_1" not in completed_step_ids
+    assert len(retriever.calls) == 1
+
+
+def test_rag_node_evidence_accumulation():
+    """Second rag_node call should APPEND to evidence, not replace."""
+    plan = AgentPlan(
+        intent="recommendation",
+        normalized_query="湘菜",
+        requires_rag=True,
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "川菜"}, False, step_id="recommend_dishes_0"),
+            GraphToolCall("recommend_dishes", {"query": "湘菜"}, False, step_id="recommend_dishes_1"),
+        ],
+    )
+    hunan_item = StubEvidenceItem(
+        "dish", 20, 2, "剁椒鱼头",
+        {"dish_id": 20, "dish_name": "剁椒鱼头", "cuisine_type": "湘菜", "price": 58.0, "merchant_name": "湘味馆", "flavor_profile": "辣"},
+        ["湘菜"], "湘菜名菜", 0.85,
+    )
+    retriever = FakeRetriever([hunan_item])
+
+    # Simulate: first RAG call already completed
+    existing_evidence = [
+        {"source_type": "dish", "source_id": 12, "facts": {"dish_id": 12, "dish_name": "宫保鸡丁", "cuisine_type": "川菜"}},
+    ]
+    state = {
+        "current_plan": plan,
+        "tool_results": [
+            {"type": "recommend_dishes", "step_id": "recommend_dishes_0", "success": True, "message": "done", "data": {}},
+        ],
+        "recent_evidence": existing_evidence,
+        "loaded_user_memories": [],
+        "messages": [HumanMessage(content="推荐一个川菜，再推荐一个湘菜")],
+    }
+
+    runtime = _make_rag_runtime(retriever)
+    with patch("service.agent_runtime.nodes.get_runtime", return_value=runtime), \
+         patch("service.config.get_config") as mock_cfg:
+        mock_cfg.return_value.rag.output_limit_default = 5
+        mock_cfg.return_value.rag.output_limit_max = 10
+        result = rag_node(state)
+
+    # Evidence should have both items
+    assert len(result["recent_evidence"]) == 2
+    source_ids = {e["source_id"] for e in result["recent_evidence"]}
+    assert 12 in source_ids  # old
+    assert 20 in source_ids  # new
+    # recommend_dishes_1 now completed
+    step_ids = {r["step_id"] for r in result["tool_results"]}
+    assert "recommend_dishes_0" in step_ids
+    assert "recommend_dishes_1" in step_ids
