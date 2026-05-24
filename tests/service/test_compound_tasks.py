@@ -386,6 +386,52 @@ def test_rag_node_evidence_accumulation():
     assert "recommend_dishes_1" in step_ids
 
 
+def test_call_scoped_plan_no_filter_leakage():
+    """_build_call_scoped_plan must NOT leak plan-level list filters to unrelated calls.
+
+    Scenario: plan has required_keywords=["咖啡"] (merged from coffee call),
+    but the sichuan call doesn't have required_keywords in its args.
+    The scoped plan for sichuan should have required_keywords=[] (empty), NOT ["咖啡"].
+    """
+    from service.agent_runtime.nodes import _build_call_scoped_plan
+
+    plan = AgentPlan(
+        intent="recommendation",
+        normalized_query="川菜和咖啡",
+        requires_rag=True,
+        filters={
+            "cuisine_types": ["川菜"],       # merged from both calls
+            "required_keywords": ["咖啡"],   # merged from coffee call only
+            "flavor_preferences": [],
+            "forbidden_keywords": [],
+            "exclude_allergens": [],
+            "source_types": [],
+            "limit": 1,
+            "sort_by": None,
+            "price_preference": None,
+            "budget_max": None,
+        },
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "川菜", "cuisine_types": ["川菜"], "limit": 1}, False, step_id="recommend_dishes_0"),
+            GraphToolCall("recommend_dishes", {"query": "咖啡", "required_keywords": ["咖啡"], "limit": 1}, False, step_id="recommend_dishes_1"),
+        ],
+    )
+
+    # Scoped plan for sichuan call — should NOT have required_keywords from coffee call
+    sichuan_scoped = _build_call_scoped_plan(plan, plan.tool_calls[0].arguments)
+    assert sichuan_scoped.filters.get("required_keywords") == [], \
+        f"川菜 scoped plan leaked required_keywords: {sichuan_scoped.filters.get('required_keywords')}"
+    assert sichuan_scoped.filters.get("cuisine_types") == ["川菜"]
+    assert sichuan_scoped.normalized_query == "川菜"
+
+    # Scoped plan for coffee call — should have required_keywords=["咖啡"]
+    coffee_scoped = _build_call_scoped_plan(plan, plan.tool_calls[1].arguments)
+    assert coffee_scoped.filters.get("required_keywords") == ["咖啡"]
+    assert coffee_scoped.filters.get("cuisine_types") == [], \
+        f"咖啡 scoped plan leaked cuisine_types: {coffee_scoped.filters.get('cuisine_types')}"
+    assert coffee_scoped.normalized_query == "咖啡"
+
+
 def test_evidence_bridging_fallback_for_add_to_cart():
     """When LLM omits dish_id, action executor should fall back to evidence."""
     plan = AgentPlan(
