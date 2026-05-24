@@ -253,7 +253,7 @@ def test_completed_tools_by_step_id_not_tool_name():
     tool_results = [
         {"type": "add_to_cart", "step_id": "add_to_cart_0", "success": True, "message": "done", "data": {}},
     ]
-    completed_step_ids = {r.get("step_id", r.get("type", "")) for r in tool_results}
+    completed_step_ids = {r.get("step_id") or r.get("type", "") for r in tool_results}
     remaining = [c for c in plan.tool_calls if c.step_id not in completed_step_ids]
     assert len(remaining) == 1
     assert remaining[0].step_id == "add_to_cart_1"
@@ -295,7 +295,7 @@ In `service/agent_runtime/nodes.py`, replace lines 221-229 in `route_after_plan`
 
 ```python
     has_evidence = bool(state.get("recent_evidence"))
-    completed_step_ids = {r.get("step_id", r.get("type", "")) for r in state.get("tool_results", [])}
+    completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
     remaining_calls = [c for c in plan.tool_calls if c.step_id not in completed_step_ids]
 
     if has_evidence and plan.intent in {"recommendation", "knowledge"} and not any(
@@ -310,7 +310,7 @@ In `service/agent_runtime/nodes.py`, replace lines 221-229 in `route_after_plan`
 In `service/agent_runtime/nodes.py`, replace lines 271-275 in `evaluate_node`:
 
 ```python
-    completed_step_ids = {r.get("step_id", r.get("type", "")) for r in state.get("tool_results", [])}
+    completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
     pending_calls = [
         call for call in plan.tool_calls
         if call.step_id not in completed_step_ids
@@ -323,7 +323,7 @@ In `service/agent_runtime/nodes.py`, replace lines 535-547 in `action_node`:
 
 ```python
     # Determine which action tool will be executed next
-    completed_step_ids = {r.get("step_id", r.get("type", "")) for r in state.get("tool_results", [])}
+    completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
     next_action_call = next(
         (c for c in plan.tool_calls
          if c.tool_name in ACTION_TOOL_NAMES and c.step_id not in completed_step_ids),
@@ -344,7 +344,7 @@ In `service/agent_runtime/nodes.py`, replace lines 535-547 in `action_node`:
 In `service/agent_runtime/nodes.py`, replace lines 366-370 in `execute_action`:
 
 ```python
-        completed_step_ids = {r.get("step_id", r.get("type", "")) for r in state.get("tool_results", [])}
+        completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
         call = next(
             (item for item in plan.tool_calls
              if item.tool_name in ACTION_TOOL_NAMES and item.step_id not in completed_step_ids),
@@ -468,6 +468,51 @@ def test_plan_replan_when_all_calls_completed():
 
     assert result["current_plan"] is new_plan
     mock_planner.plan.assert_called_once()
+
+
+def test_replan_deconflicts_step_ids():
+    """When re-planning, new step_ids must not collide with already-completed ones."""
+    original_plan = AgentPlan(
+        intent="recommendation",
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "川菜"}, False, step_id="recommend_dishes_0"),
+        ],
+    )
+    state = {
+        "messages": [HumanMessage(content="推荐一个川菜，再推荐一个湘菜")],
+        "current_plan": original_plan,
+        "tool_results": [
+            {"type": "recommend_dishes", "step_id": "recommend_dishes_0", "success": True, "message": "done", "data": {}},
+        ],
+        "session_id": "s1",
+        "user_id": 1,
+        "loaded_user_memories": [],
+        "recent_action_ids": [],
+        "iteration_count": 1,
+        "recent_evidence": [{"source_type": "dish", "source_id": 12, "facts": {"dish_id": 12, "cuisine_type": "川菜"}}],
+        "last_recommendations": [],
+    }
+
+    # LLM returns a new plan with step_id that WOULD collide (recommend_dishes_0)
+    colliding_plan = AgentPlan(
+        intent="recommendation",
+        requires_rag=True,
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "湘菜", "cuisine_types": ["湘菜"]}, False, step_id="recommend_dishes_0"),
+        ],
+    )
+    mock_planner = MagicMock()
+    mock_planner.plan.return_value = colliding_plan
+    mock_runtime = MagicMock()
+    mock_runtime.planner = mock_planner
+
+    with patch("service.agent_runtime.nodes.get_runtime", return_value=mock_runtime):
+        result = plan_node(state)
+
+    returned_plan = result["current_plan"]
+    # step_id should have been reassigned to avoid collision
+    assert returned_plan.tool_calls[0].step_id != "recommend_dishes_0"
+    assert returned_plan.tool_calls[0].step_id == "recommend_dishes_1"
 ```
 
 Add the necessary import at the top of the test file:
@@ -493,7 +538,7 @@ def plan_node(state: dict, config: RunnableConfig | None = None) -> dict:
     current_plan = state.get("current_plan")
     if current_plan and current_plan.tool_calls:
         completed_step_ids = {
-            r.get("step_id", r.get("type", ""))
+            r.get("step_id") or r.get("type", "")
             for r in state.get("tool_results", [])
         }
         pending = [c for c in current_plan.tool_calls if c.step_id not in completed_step_ids]
@@ -520,7 +565,27 @@ def plan_node(state: dict, config: RunnableConfig | None = None) -> dict:
             "last_recommendations": state.get("last_recommendations", []),
         },
     )
+
+    # De-conflict step_ids: re-plan generates step_ids from counter=0,
+    # which may collide with already-completed step_ids in tool_results.
+    used_step_ids = {
+        r.get("step_id") or r.get("type", "")
+        for r in state.get("tool_results", [])
+    }
+    _deconflict_step_ids(plan, used_step_ids)
+
     return {"current_plan": plan}
+
+
+def _deconflict_step_ids(plan, used_step_ids: set[str]) -> None:
+    """Reassign any step_id in plan.tool_calls that collides with used_step_ids."""
+    for call in plan.tool_calls:
+        if call.step_id in used_step_ids:
+            suffix = 0
+            while f"{call.tool_name}_{suffix}" in used_step_ids:
+                suffix += 1
+            call.step_id = f"{call.tool_name}_{suffix}"
+            used_step_ids.add(call.step_id)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -899,7 +964,7 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
 
     # Find the NEXT pending RAG call (single-step execution)
     completed_step_ids = {
-        r.get("step_id", r.get("type", ""))
+        r.get("step_id") or r.get("type", "")
         for r in state.get("tool_results", [])
     }
     next_rag_call = next(
@@ -1064,14 +1129,21 @@ With:
             dish_id = call.arguments.get("dish_id")
             quantity = call.arguments.get("quantity", 1)
 
-            # Evidence bridging fallback: if LLM omitted dish_id, pick from evidence
+            # Evidence bridging fallback: if LLM omitted dish_id, pick from evidence.
+            # Use index-based mapping: the Nth pending add_to_cart maps to the Nth dish evidence.
             if dish_id is None:
                 dish_evidence = [
                     e for e in state.get("recent_evidence", [])
                     if e.get("source_type") == "dish"
                 ]
                 if dish_evidence:
-                    dish_id = dish_evidence[0].get("facts", {}).get("dish_id")
+                    # Count how many add_to_cart calls already completed
+                    completed_cart_count = sum(
+                        1 for r in state.get("tool_results", [])
+                        if r.get("type") == "add_to_cart" and r.get("success")
+                    )
+                    ev_index = min(completed_cart_count, len(dish_evidence) - 1)
+                    dish_id = dish_evidence[ev_index].get("facts", {}).get("dish_id")
 
             if dish_id is None:
                 return {
@@ -1348,7 +1420,6 @@ def test_respond_merges_action_results_with_evidence():
     message = result["response_payload"]["message"]
     # Should contain both recommendation text AND action confirmation
     assert "宫保鸡丁" in message
-    assert "✅" in message
     assert "已将宫保鸡丁加入购物车" in message
     assert result["response_payload"]["response_type"] == "action_completed"
 ```
@@ -1398,18 +1469,30 @@ With:
 ```python
     elif evidence:
         message = _template_recommendation(recommendations)
-        # Append action confirmation when both evidence and action results exist
-        if tool_results:
-            action_msgs = [
-                r.get("message", "")
-                for r in tool_results
-                if r.get("success") and r.get("type", "") in ACTION_TOOL_NAMES
-            ]
-            if action_msgs:
-                message += "\n\n" + "\n".join(f"✅ {m}" for m in action_msgs)
+        message = _append_action_confirmations(message, tool_results)
 ```
 
-- [ ] **Step 5: Update LLM response path to inject tool_results**
+- [ ] **Step 5: Add `_append_action_confirmations` helper**
+
+In `service/agent_runtime/nodes.py`, add this helper function before `respond_node`:
+
+```python
+def _append_action_confirmations(message: str, tool_results: list[dict]) -> str:
+    """Append action confirmation lines to a message. Used by both template
+    and LLM-fallback paths to ensure action results are never silently dropped."""
+    if not tool_results:
+        return message
+    action_msgs = [
+        r.get("message", "")
+        for r in tool_results
+        if r.get("success") and r.get("type", "") in ACTION_TOOL_NAMES
+    ]
+    if action_msgs:
+        message += "\n\n" + "\n".join(f"- {m}" for m in action_msgs)
+    return message
+```
+
+- [ ] **Step 6: Update LLM response path to inject tool_results**
 
 In `service/agent_runtime/nodes.py`, update the `if evidence and use_llm:` branch (around line 629-630):
 
@@ -1469,20 +1552,21 @@ def _generate_llm_response(
     except Exception:
         logger.warning("LLM response generation failed, falling back to template", exc_info=True)
         recommendations, _ = _build_structured_data(evidence)
-        return _template_recommendation(recommendations)
+        fallback = _template_recommendation(recommendations)
+        return _append_action_confirmations(fallback, tool_results or [])
 ```
 
-- [ ] **Step 7: Run tests to verify they pass**
+- [ ] **Step 8: Run tests to verify they pass**
 
 Run: `python -m pytest tests/service/test_compound_tasks.py -v`
-Expected: All 18 tests PASS
+Expected: All tests PASS
 
-- [ ] **Step 8: Run existing respond tests for regressions**
+- [ ] **Step 9: Run existing respond tests for regressions**
 
 Run: `python -m pytest tests/service/test_langgraph_agent_graph.py tests/service/test_multistep_plan.py tests/service/test_assistant_service_langgraph.py -v`
 Expected: All PASS
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add service/agent_runtime/nodes.py tests/service/test_compound_tasks.py
@@ -1567,7 +1651,7 @@ class CompoundExecutor:
         self.executed = []
 
     def execute_action(self, plan, state):
-        completed_step_ids = {r.get("step_id", r.get("type", "")) for r in state.get("tool_results", [])}
+        completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
         call = next(
             (c for c in plan.tool_calls
              if c.tool_name in ACTION_TOOL_NAMES and c.step_id not in completed_step_ids),
@@ -1661,7 +1745,7 @@ def test_integration_recommend_then_add_to_cart():
     # Verify: response mentions both recommendation and action
     message = result["response_payload"]["message"]
     assert "宫保鸡丁" in message
-    assert "✅" in message
+    assert "已将菜品" in message  # action confirmation present
 ```
 
 - [ ] **Step 2: Write integration test for "recommend then add ALL to cart"**
@@ -1787,21 +1871,101 @@ def test_integration_multi_cuisine_rag():
     assert "剁椒鱼头" in message
 ```
 
-- [ ] **Step 4: Run all tests**
+- [ ] **Step 4: Write integration test for Path B — evaluate detects unfulfilled retrieval and triggers re-plan**
+
+This is the more robust path where the LLM only generates one RAG call initially, and `_has_unfulfilled_retrieval_intent` in evaluate_node detects the missing cuisine and triggers a re-plan.
+
+Append to `tests/service/test_compound_tasks.py`:
+
+```python
+def test_integration_multi_cuisine_path_b_replan():
+    """E2E Path B: LLM only generates one RAG call, evaluate detects missing cuisine → re-plan → second RAG."""
+    sichuan = _make_evidence_items([
+        {"dish_id": 12, "dish_name": "宫保鸡丁", "price": 28.0, "merchant_name": "川味坊", "cuisine_type": "川菜", "flavor_profile": "麻辣"},
+    ])
+    hunan = _make_evidence_items([
+        {"dish_id": 20, "dish_name": "剁椒鱼头", "price": 58.0, "merchant_name": "湘味馆", "cuisine_type": "湘菜", "flavor_profile": "辣"},
+    ])
+
+    class PathBPlanner:
+        """First call: only Sichuan RAG. Second call (after evaluate triggers re-plan): Hunan RAG."""
+        def __init__(self):
+            self.call_count = 0
+
+        def plan(self, message, context):
+            self.call_count += 1
+            if self.call_count == 1:
+                # Only generate ONE RAG call — intentionally incomplete
+                return AgentPlan(
+                    intent="recommendation",
+                    normalized_query="川菜",
+                    requires_rag=True,
+                    tool_calls=[
+                        GraphToolCall("recommend_dishes", {"query": "川菜", "cuisine_types": ["川菜"], "limit": 1}, False, step_id="recommend_dishes_0"),
+                    ],
+                )
+            # Second call: evaluate detected missing 湘菜 → generate second RAG call
+            return AgentPlan(
+                intent="recommendation",
+                normalized_query="湘菜",
+                requires_rag=True,
+                tool_calls=[
+                    GraphToolCall("recommend_dishes", {"query": "湘菜", "cuisine_types": ["湘菜"], "limit": 1}, False, step_id="recommend_dishes_1"),
+                ],
+            )
+
+    planner = PathBPlanner()
+    retriever = CompoundRetriever({"川菜": sichuan, "湘菜": hunan})
+    executor = CompoundExecutor()
+
+    graph = build_agent_graph()
+    runtime = AgentRuntimeContext(
+        planner=planner, retriever=retriever,
+        action_executor=executor, use_llm_response=False,
+    )
+
+    result = graph.invoke({
+        "messages": [HumanMessage(content="推荐一个川菜，再推荐一个湘菜")],
+        "session_id": "test_compound_4",
+        "user_id": 1,
+        "loaded_user_memories": [],
+        "recent_evidence": [],
+        "recent_action_ids": [],
+        "tool_results": [],
+        "iteration_count": 0,
+        "max_iterations": 5,
+    }, config={"configurable": {"thread_id": "t4", "runtime": runtime}})
+
+    # Planner should have been called twice (initial + continuation after evaluate)
+    assert planner.call_count == 2
+    # Evidence should contain both cuisines
+    evidence = result.get("recent_evidence", [])
+    cuisine_types = {e.get("facts", {}).get("cuisine_type") for e in evidence}
+    assert "川菜" in cuisine_types
+    assert "湘菜" in cuisine_types
+    # Two retrieval calls made
+    assert len(retriever.calls) == 2
+    # Response mentions both dishes
+    message = result["response_payload"]["message"]
+    assert "宫保鸡丁" in message
+    assert "剁椒鱼头" in message
+```
+
+- [ ] **Step 5: Run all tests**
 
 Run: `python -m pytest tests/service/test_compound_tasks.py -v`
-Expected: All 21 tests PASS
+Expected: All tests PASS
 
-- [ ] **Step 5: Run the full test suite for regressions**
+- [ ] **Step 6: Run related tests for regressions**
 
-Run: `python -m pytest tests/ -v --timeout=60`
-Expected: All existing tests PASS
+Run: `python -m pytest tests/service/test_compound_tasks.py tests/service/test_langgraph_agent_graph.py tests/service/test_multistep_plan.py tests/service/test_langgraph_agent_planner.py -v`
+Expected: All PASS
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add tests/service/test_compound_tasks.py
-git commit -m "test: add integration tests for 3 compound task scenarios"
+git commit -m "test: add integration tests for 4 compound task scenarios including Path B re-plan"
 ```
 
 ---
@@ -1836,11 +2000,11 @@ from service.agent_runtime.state import AgentPlan, GraphToolCall
 1. `feat: add step_id field to GraphToolCall and schema`
 2. `feat: replace tool_name dedup with step_id dedup in _parse_tool_calls`
 3. `feat: switch all completion checks from tool_name to step_id`
-4. `feat: plan_node reuses current plan when pending calls exist`
+4. `feat: plan_node reuses current plan when pending calls exist; deconflict step_ids on re-plan`
 5. `feat: inject ReAct observation context into planner _build_human_input`
 6. `feat: add ReAct continuation planning rules to planner prompt`
 7. `feat: rag_node single-step execution with evidence accumulation`
 8. `feat: evidence bridging fallback when LLM omits dish_id in add_to_cart`
 9. `feat: evaluate_node detects unfulfilled action and retrieval intent`
 10. `feat: respond_node merges action confirmation with recommendation output`
-11. `test: add integration tests for 3 compound task scenarios`
+11. `test: add integration tests for 4 compound task scenarios including Path B re-plan`
