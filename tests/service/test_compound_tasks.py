@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import HumanMessage
 
-from service.agent_runtime.nodes import LocalActionExecutor, _normalize_tool_result, evaluate_node, plan_node, rag_node
+from service.agent_runtime.nodes import LocalActionExecutor, _normalize_tool_result, evaluate_node, plan_node, rag_node, respond_node
 from service.agent_runtime.planner import LangGraphAgentPlanner
 from service.agent_runtime.state import AgentPlan, GraphToolCall
 
@@ -476,3 +476,50 @@ def test_unfulfilled_retrieval_intent_multi_cuisine():
     }
     result = evaluate_node(state)
     assert result["_next"] == "plan"
+
+
+def test_respond_merges_action_results_with_evidence():
+    """When both evidence and action tool_results exist, response should mention both."""
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "川菜"}, False, step_id="recommend_dishes_0"),
+            GraphToolCall("add_to_cart", {"dish_id": 12}, True, step_id="add_to_cart_0"),
+        ],
+    )
+    state = {
+        "messages": [HumanMessage(content="推荐几个川菜然后加入购物车")],
+        "current_plan": plan,
+        "recent_evidence": [
+            {
+                "source_type": "dish", "source_id": 12, "merchant_id": 1,
+                "title": "宫保鸡丁",
+                "facts": {"dish_id": 12, "dish_name": "宫保鸡丁", "price": 28.0, "merchant_name": "川味坊"},
+                "why_matched": ["川菜"], "citation": "经典川菜", "score": 0.9,
+            },
+        ],
+        "tool_results": [
+            {"type": "recommend_dishes", "step_id": "recommend_dishes_0", "success": True, "message": "检索到 1 条结果", "data": {}},
+            {"type": "add_to_cart", "step_id": "add_to_cart_0", "success": True, "message": "已将宫保鸡丁加入购物车", "data": {}},
+        ],
+        "session_id": "s1",
+        "user_id": 1,
+        "loaded_user_memories": [],
+        "recent_action_ids": ["act_1"],
+        "iteration_count": 2,
+        "max_iterations": 5,
+        "metrics": {},
+        "guardrail_blocked": False,
+    }
+
+    runtime = MagicMock()
+    runtime.use_llm_response = False  # Use template path for deterministic test
+
+    with patch("service.agent_runtime.nodes.get_runtime", return_value=runtime):
+        result = respond_node(state)
+
+    message = result["response_payload"]["message"]
+    # Should contain both recommendation text AND action confirmation
+    assert "宫保鸡丁" in message
+    assert "已将宫保鸡丁加入购物车" in message
+    assert result["response_payload"]["response_type"] == "action_completed"

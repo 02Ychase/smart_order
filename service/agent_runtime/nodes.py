@@ -758,6 +758,21 @@ def _normalize_tool_result(result: dict, state: dict, executed_tool_name: str = 
     }
 
 
+def _append_action_confirmations(message: str, tool_results: list[dict]) -> str:
+    """Append action confirmation lines to a message. Used by both template
+    and LLM-fallback paths to ensure action results are never silently dropped."""
+    if not tool_results:
+        return message
+    action_msgs = [
+        r.get("message", "")
+        for r in tool_results
+        if r.get("success") and r.get("type", "") in ACTION_TOOL_NAMES
+    ]
+    if action_msgs:
+        message += "\n\n" + "\n".join(f"- {m}" for m in action_msgs)
+    return message
+
+
 def respond_node(state: dict, config: RunnableConfig | None = None) -> dict:
     runtime = get_runtime(config)
     use_llm = runtime.use_llm_response if runtime else True
@@ -803,9 +818,13 @@ def respond_node(state: dict, config: RunnableConfig | None = None) -> dict:
     tool_results = state.get("tool_results", [])
 
     if evidence and use_llm:
-        message = _generate_llm_response(user_message, response_type, evidence, conversation_history)
+        message = _generate_llm_response(
+            user_message, response_type, evidence, conversation_history,
+            tool_results=tool_results,
+        )
     elif evidence:
         message = _template_recommendation(recommendations)
+        message = _append_action_confirmations(message, tool_results)
     elif tool_results:
         message = tool_results[0].get("message", "操作已完成")
     elif response_type == "greeting":
@@ -903,6 +922,7 @@ def _generate_llm_response(
     response_type: str,
     evidence: list[dict],
     conversation_history: str = "",
+    tool_results: list[dict] | None = None,
 ) -> str:
     try:
         from service.agent_runtime.prompts import PromptRegistry
@@ -916,13 +936,25 @@ def _generate_llm_response(
         parts.append(f"用户最新消息：{user_message}")
         parts.append(f"意图：{response_type}")
         parts.append(f"\n检索到的证据：\n{evidence_text}")
-        parts.append("\n请基于证据生成自然回复。")
+
+        # Inject completed action results for compound scenarios
+        if tool_results:
+            action_lines = []
+            for r in tool_results:
+                if r.get("type", "") in ACTION_TOOL_NAMES:
+                    status = "成功" if r.get("success") else "失败"
+                    action_lines.append(f"- {r.get('message', '')}（{status}）")
+            if action_lines:
+                parts.append(f"\n已完成的操作：\n" + "\n".join(action_lines))
+
+        parts.append("\n请基于证据和已完成操作生成自然回复。")
         prompt = "\n".join(parts)
         return call_llm(query=prompt, system_instruction=system_prompt)
     except Exception:
         logger.warning("LLM response generation failed, falling back to template", exc_info=True)
         recommendations, _ = _build_structured_data(evidence)
-        return _template_recommendation(recommendations)
+        fallback = _template_recommendation(recommendations)
+        return _append_action_confirmations(fallback, tool_results or [])
 
 
 def _format_evidence_for_llm(evidence: list[dict]) -> str:
@@ -964,6 +996,14 @@ def _template_recommendation(recommendations: list[dict]) -> str:
 def _external_response_type(plan, state: dict) -> str:
     if plan is None:
         return "unsupported"
+    # Compound scenario: evidence + successful action → action_completed
+    tool_results = state.get("tool_results", [])
+    has_successful_action = any(
+        r.get("success") and r.get("type", "") in ACTION_TOOL_NAMES
+        for r in tool_results
+    )
+    if has_successful_action:
+        return "action_completed"
     if state.get("tool_results") and plan.intent in {
         "cart_action",
         "address_action",
