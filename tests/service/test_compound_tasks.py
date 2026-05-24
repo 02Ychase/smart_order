@@ -1,7 +1,8 @@
 """Tests for ReAct compound task enhancements."""
 
+from service.agent_runtime.nodes import _normalize_tool_result
 from service.agent_runtime.planner import LangGraphAgentPlanner
-from service.agent_runtime.state import GraphToolCall
+from service.agent_runtime.state import AgentPlan, GraphToolCall
 
 
 def test_graph_tool_call_has_step_id_field():
@@ -56,3 +57,30 @@ def test_parse_tool_calls_preserves_llm_step_id():
     ]
     calls = planner._parse_tool_calls(raw_calls, "recommendation")
     assert calls[0].step_id == "rag_sichuan"
+
+
+def test_normalize_tool_result_includes_step_id():
+    result = {"success": True, "message": "done", "data": {}}
+    state = {"current_plan": None}
+    normalized = _normalize_tool_result(result, state, executed_tool_name="add_to_cart", step_id="add_to_cart_0")
+    assert normalized["step_id"] == "add_to_cart_0"
+    assert normalized["type"] == "add_to_cart"
+
+
+def test_completed_tools_by_step_id_not_tool_name():
+    """Two add_to_cart calls: completing step_id=add_to_cart_0 should NOT mark add_to_cart_1 as done."""
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[
+            GraphToolCall("add_to_cart", {"dish_id": 12}, True, step_id="add_to_cart_0"),
+            GraphToolCall("add_to_cart", {"dish_id": 35}, True, step_id="add_to_cart_1"),
+        ],
+    )
+    tool_results = [
+        {"type": "add_to_cart", "step_id": "add_to_cart_0", "success": True, "message": "done", "data": {}},
+    ]
+    completed_step_ids = {r.get("step_id") or r.get("type", "") for r in tool_results}
+    remaining = [c for c in plan.tool_calls if c.step_id not in completed_step_ids]
+    assert len(remaining) == 1
+    assert remaining[0].step_id == "add_to_cart_1"
+    assert remaining[0].arguments["dish_id"] == 35

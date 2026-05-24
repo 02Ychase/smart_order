@@ -219,12 +219,11 @@ def route_after_plan(state: dict) -> str:
         return "respond"
 
     has_evidence = bool(state.get("recent_evidence"))
-    completed_tools = {r.get("type", "") for r in state.get("tool_results", [])}
-
-    remaining_calls = [c for c in plan.tool_calls if c.tool_name not in completed_tools]
+    completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
+    remaining_calls = [c for c in plan.tool_calls if c.step_id not in completed_step_ids]
 
     if has_evidence and plan.intent in {"recommendation", "knowledge"} and not any(
-        c.tool_name in ACTION_TOOL_NAMES for c in remaining_calls
+        c.tool_name in ACTION_TOOL_NAMES | RAG_TOOL_NAMES for c in remaining_calls
     ):
         logger.debug("Agent route: evidence already present, intent=%s → respond", plan.intent)
         return "respond"
@@ -268,10 +267,10 @@ def evaluate_node(state: dict) -> dict:
     if plan is None:
         return {"iteration_count": iteration, "_next": "respond", "metrics": existing_metrics}
 
-    completed_tools = {r.get("type", "") for r in state.get("tool_results", [])}
+    completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
     pending_calls = [
         call for call in plan.tool_calls
-        if call.tool_name not in completed_tools
+        if call.step_id not in completed_step_ids
     ]
 
     has_pending_action = any(call.tool_name in ACTION_TOOL_NAMES for call in pending_calls)
@@ -334,11 +333,12 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
 
     # Mark RAG tool calls as completed to prevent re-execution loops
     existing_results = list(state.get("tool_results", []))
-    completed = {r.get("type", "") for r in existing_results}
+    completed_step_ids = {r.get("step_id") or r.get("type", "") for r in existing_results}
     for call in plan.tool_calls:
-        if call.tool_name in RAG_TOOL_NAMES and call.tool_name not in completed:
+        if call.tool_name in RAG_TOOL_NAMES and call.step_id not in completed_step_ids:
             existing_results.append({
                 "type": call.tool_name,
+                "step_id": call.step_id,
                 "success": True,
                 "message": f"检索到 {len(serialized)} 条结果",
                 "data": {},
@@ -363,10 +363,10 @@ class LocalActionExecutor:
 
         user_id = state.get("user_id")
         session_id = state.get("session_id")
-        completed_tools = {r.get("type", "") for r in state.get("tool_results", [])}
+        completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
         call = next(
             (item for item in plan.tool_calls
-             if item.tool_name in ACTION_TOOL_NAMES and item.tool_name not in completed_tools),
+             if item.tool_name in ACTION_TOOL_NAMES and item.step_id not in completed_step_ids),
             None,
         )
         if call is None:
@@ -533,18 +533,20 @@ def action_node(state: dict, config: RunnableConfig | None = None) -> dict:
     plan = state["current_plan"]
 
     # Determine which action tool will be executed next
-    completed_tools = {r.get("type", "") for r in state.get("tool_results", [])}
-    executed_tool_name = next(
-        (c.tool_name for c in plan.tool_calls
-         if c.tool_name in ACTION_TOOL_NAMES and c.tool_name not in completed_tools),
-        "",
+    completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
+    next_action_call = next(
+        (c for c in plan.tool_calls
+         if c.tool_name in ACTION_TOOL_NAMES and c.step_id not in completed_step_ids),
+        None,
     )
+    executed_tool_name = next_action_call.tool_name if next_action_call else ""
+    executed_step_id = next_action_call.step_id if next_action_call else ""
 
     result = executor.execute_action(plan, state)
 
     # Accumulate tool_results instead of replacing
     existing_results = list(state.get("tool_results", []))
-    existing_results.append(_normalize_tool_result(result, state, executed_tool_name))
+    existing_results.append(_normalize_tool_result(result, state, executed_tool_name, step_id=executed_step_id))
 
     recent_ids = list(state.get("recent_action_ids", []))
     if result.get("action_id"):
@@ -560,11 +562,11 @@ def undo_node(state: dict, config: RunnableConfig | None = None) -> dict:
     executor = (runtime.action_executor if runtime else None) or LocalActionExecutor()
     result = executor.undo_last(state)
     existing_results = list(state.get("tool_results", []))
-    existing_results.append(_normalize_tool_result(result, state, "undo_last_action"))
+    existing_results.append(_normalize_tool_result(result, state, "undo_last_action", step_id="undo_last_action_0"))
     return {"tool_results": existing_results}
 
 
-def _normalize_tool_result(result: dict, state: dict, executed_tool_name: str = "") -> dict:
+def _normalize_tool_result(result: dict, state: dict, executed_tool_name: str = "", step_id: str = "") -> dict:
     tool_name = executed_tool_name
     if not tool_name:
         plan = state.get("current_plan")
@@ -576,6 +578,7 @@ def _normalize_tool_result(result: dict, state: dict, executed_tool_name: str = 
             data[key] = result[key]
     return {
         "type": result.get("type") or tool_name or "unknown",
+        "step_id": step_id,
         "success": bool(result.get("success", False)),
         "message": result.get("message", ""),
         "data": data,
