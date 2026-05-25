@@ -81,7 +81,7 @@ def test_hard_filters_remove_only_confirmed_allergen_matches() -> None:
     assert [item.stable_key for item in filtered] == ["dish:2", "dish:3", "dish:4"]
 
 
-def test_hard_filters_apply_cuisine_budget_and_keyword_constraints() -> None:
+def test_hard_filters_apply_cuisine_budget_and_forbidden_keyword_constraints() -> None:
     candidates = [
         FusedCandidate(
             stable_key="dish:1",
@@ -138,7 +138,6 @@ def test_hard_filters_apply_cuisine_budget_and_keyword_constraints() -> None:
         must_filters={
             "is_available": True,
             "cuisine_types": ["意式"],
-            "required_keywords": ["披萨", "芝士"],
             "forbidden_keywords": ["麻辣浓郁"],
             "budget_max": 100,
         },
@@ -151,6 +150,52 @@ def test_hard_filters_apply_cuisine_budget_and_keyword_constraints() -> None:
     # dish:2 removed (forbidden keyword), dish:3 removed (wrong cuisine)
     # dish:1 (42元) and dish:4 (88元) both under budget_max=100 → kept
     assert [item.stable_key for item in filtered] == ["dish:1", "dish:4"]
+
+
+def test_required_keywords_not_used_as_hard_filter() -> None:
+    """required_keywords should NOT filter candidates — they are semantic hints
+    kept in the query for vector search, not literal text match filters."""
+    candidates = [
+        FusedCandidate(
+            stable_key="dish:1",
+            source_type="dish",
+            source_id=1,
+            facts={
+                "dish_name": "辣椒炒肉",
+                "cuisine_type": "湘菜",
+                "tags": ["湘菜", "热卖"],
+                "is_available": True,
+            },
+        ),
+        FusedCandidate(
+            stable_key="dish:2",
+            source_type="dish",
+            source_id=2,
+            facts={
+                "dish_name": "酸辣土豆丝",
+                "cuisine_type": "川菜",
+                "tags": ["川菜", "素菜"],
+                "is_available": True,
+            },
+        ),
+    ]
+    plan = RagQueryPlan(
+        original_query="推荐一道荤菜",
+        normalized_query="推荐一道荤菜川菜或湘菜",
+        must_filters={
+            "is_available": True,
+            "cuisine_types": ["川菜", "湘菜"],
+            "required_keywords": ["荤菜"],
+        },
+        should_filters={},
+        source_types=["dish"],
+    )
+
+    filtered = apply_hard_filters(candidates, plan)
+
+    # Both dishes pass — "荤菜" is NOT used as a hard filter even though
+    # neither dish contains the literal text "荤菜"
+    assert [item.stable_key for item in filtered] == ["dish:1", "dish:2"]
 
 
 def test_budget_filter_only_excludes_single_dish_exceeding_budget() -> None:

@@ -215,7 +215,53 @@ def test_backward_compatible_no_new_memory_types() -> None:
     plan = planner.plan("帮我推荐菜", agent_plan, memories=memories)
 
     assert "海鲜" in plan.must_filters["exclude_allergens"]
-    assert "川菜" in plan.must_filters["cuisine_types"]
+    # Cuisine preferences from memory should NOT be injected as hard filters
+    assert "cuisine_types" not in plan.must_filters or "川菜" not in plan.must_filters.get("cuisine_types", [])
     assert "辣" in plan.should_filters["flavor_preferences"]
     assert plan.preferred_dishes == []
     assert plan.preferred_merchants == []
+
+
+def test_memory_cuisine_preference_not_injected_as_hard_filter() -> None:
+    """food_preference memories with cuisine info must NOT add cuisine_types
+    to must_filters. They should remain soft signals only."""
+    planner = RagQueryPlanner()
+    agent_plan = AgentPlan(
+        intent="recommendation",
+        normalized_query="推荐一份甜品",
+        filters={"cuisine_types": [], "exclude_allergens": []},
+        requires_rag=True,
+    )
+    memories = [
+        {"memory_type": "food_preference", "content": "用户偏好川菜"},
+        {"memory_type": "food_preference", "content": "用户喜欢川菜"},
+        {"memory_type": "food_preference", "content": "用户对川菜感兴趣"},
+    ]
+
+    plan = planner.plan("推荐一份甜品", agent_plan, memories=memories)
+
+    # No cuisine hard filter — the sub-task has no cuisine constraint,
+    # memory preferences should not leak in
+    assert plan.must_filters.get("cuisine_types") is None or plan.must_filters.get("cuisine_types") == []
+
+
+def test_dietary_constraint_still_injected_as_hard_filter() -> None:
+    """dietary_constraint memories (allergies) must still be hard filters."""
+    planner = RagQueryPlanner()
+    agent_plan = AgentPlan(
+        intent="recommendation",
+        normalized_query="推荐一份甜品",
+        filters={"cuisine_types": [], "exclude_allergens": []},
+        requires_rag=True,
+    )
+    memories = [
+        {"memory_type": "dietary_constraint", "content": "用户不吃花生"},
+        {"memory_type": "food_preference", "content": "用户偏好川菜"},
+    ]
+
+    plan = planner.plan("推荐一份甜品", agent_plan, memories=memories)
+
+    # Allergens remain as hard filter
+    assert "花生" in plan.must_filters["exclude_allergens"]
+    # Cuisine preference does NOT become hard filter
+    assert plan.must_filters.get("cuisine_types") is None or plan.must_filters.get("cuisine_types") == []

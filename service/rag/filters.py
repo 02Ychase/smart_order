@@ -12,7 +12,6 @@ def apply_hard_filters(candidates: list[FusedCandidate], plan: RagQueryPlan) -> 
     require_available = bool(filters.get("is_available", False))
     merchant_name = filters.get("merchant_name")
     cuisine_types = filters.get("cuisine_types") or []
-    required_keywords = filters.get("required_keywords") or []
     forbidden_keywords = filters.get("forbidden_keywords") or []
     budget_max = filters.get("budget_max")
     allowed_source_types = set(plan.source_types) if plan.source_types else None
@@ -39,8 +38,6 @@ def apply_hard_filters(candidates: list[FusedCandidate], plan: RagQueryPlan) -> 
             category = str(facts.get("homepage_category") or "")
             if not any(item == cuisine or item in cuisine or item in category for item in cuisine_types):
                 continue
-        if required_keywords and not all(keyword in text for keyword in required_keywords):
-            continue
         if forbidden_keywords and any(keyword in text for keyword in forbidden_keywords):
             continue
         kept.append(candidate)

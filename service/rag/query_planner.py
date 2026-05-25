@@ -26,7 +26,7 @@ class RagQueryPlanner:
 
         preferred_dishes: list[str] = []
         preferred_merchants: list[str] = []
-        _apply_memory_hints(memories, cuisine_types, flavor_preferences, exclude_allergens, preferred_dishes, preferred_merchants)
+        _apply_memory_hints(memories, flavor_preferences, exclude_allergens, preferred_dishes, preferred_merchants)
 
         if self._rewriter is not None:
             expansion_queries = self._rewriter.rewrite(normalized)
@@ -84,7 +84,6 @@ class RagQueryPlanner:
 
 def _apply_memory_hints(
     memories: list[dict],
-    cuisine_types: list[str],
     flavor_preferences: list[str],
     exclude_allergens: list[str],
     preferred_dishes: list[str] | None = None,
@@ -102,9 +101,6 @@ def _apply_memory_hints(
                 if allergen in content and allergen not in exclude_allergens:
                     exclude_allergens.append(allergen)
         elif memory_type == "food_preference" and content:
-            for cuisine in ["湘菜", "川菜", "粤菜", "鲁菜", "苏菜", "闽菜", "浙菜", "徽菜", "东北菜"]:
-                if cuisine in content and cuisine not in cuisine_types:
-                    cuisine_types.append(cuisine)
             for flavor in ["辣", "麻", "酸", "甜", "清淡", "鲜", "香"]:
                 if flavor in content and flavor not in flavor_preferences:
                     flavor_preferences.append(flavor)
