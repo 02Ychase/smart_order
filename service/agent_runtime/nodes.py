@@ -864,6 +864,7 @@ def respond_node(state: dict, config: RunnableConfig | None = None) -> dict:
         message = _generate_llm_response(
             user_message, response_type, evidence, conversation_history,
             tool_results=tool_results,
+            response_hint=plan.response_hint if plan else "",
         )
     elif evidence:
         message = _template_recommendation(recommendations)
@@ -970,6 +971,7 @@ def _generate_llm_response(
     evidence: list[dict],
     conversation_history: str = "",
     tool_results: list[dict] | None = None,
+    response_hint: str = "",
 ) -> str:
     try:
         from service.agent_runtime.prompts import PromptRegistry
@@ -993,6 +995,9 @@ def _generate_llm_response(
                     action_lines.append(f"- {r.get('message', '')}（{status}）")
             if action_lines:
                 parts.append(f"\n已完成的操作：\n" + "\n".join(action_lines))
+
+        if response_hint:
+            parts.append(f"\n规划提示：{response_hint}")
 
         parts.append("\n请基于证据和已完成操作生成自然回复。")
         prompt = "\n".join(parts)

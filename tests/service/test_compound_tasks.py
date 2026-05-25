@@ -728,6 +728,42 @@ def test_respond_merges_action_results_with_evidence():
     assert result["response_payload"]["response_type"] == "action_completed"
 
 
+def test_respond_node_passes_response_hint_to_llm():
+    """respond_node should pass plan.response_hint to _generate_llm_response."""
+    plan = AgentPlan(
+        intent="recommendation",
+        response_hint="推荐辣椒炒肉作为荤菜，总价约50元",
+    )
+    state = {
+        "messages": [HumanMessage(content="推荐一个荤菜")],
+        "current_plan": plan,
+        "recent_evidence": [
+            {"source_type": "dish", "source_id": 12, "facts": {"dish_id": 12, "dish_name": "辣椒炒肉", "merchant_name": "湘味馆", "price": 29.0, "cuisine_type": "湘菜", "flavor_profile": "辣"}, "why_matched": ["湘菜"], "citation": "", "score": 0.9},
+        ],
+        "tool_results": [],
+        "session_id": "s1",
+        "metrics": {},
+    }
+
+    captured_kwargs = {}
+
+    def fake_generate(user_message, response_type, evidence, conversation_history="", tool_results=None, response_hint=""):
+        captured_kwargs["response_hint"] = response_hint
+        return "测试回复"
+
+    mock_runtime = MagicMock()
+    mock_runtime.use_llm_response = True
+
+    with patch("service.agent_runtime.nodes.get_runtime", return_value=mock_runtime), \
+         patch("service.agent_runtime.nodes._generate_llm_response", side_effect=fake_generate), \
+         patch("service.agent_runtime.nodes._external_response_type", return_value="recommendation"), \
+         patch("service.config.get_config") as mock_cfg:
+        mock_cfg.return_value.guardrails.enable_output_guardrail = False
+        respond_node(state)
+
+    assert captured_kwargs["response_hint"] == "推荐辣椒炒肉作为荤菜，总价约50元"
+
+
 # ── Integration Test Helpers ──────────────────────────────────────────
 
 class CompoundPlanner:
