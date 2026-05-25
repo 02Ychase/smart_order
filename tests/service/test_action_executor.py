@@ -107,3 +107,72 @@ def test_execute_upsert_preference():
 
     assert result["success"] is True
     assert result["message"] == "已更新用户偏好"
+
+
+def test_execute_batch_add_to_cart():
+    """Batch add_to_cart should add multiple dishes in a single call."""
+    executor = LocalActionExecutor(session=FakeSession())
+
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[GraphToolCall(
+            tool_name="add_to_cart",
+            arguments={"items": [
+                {"dish_id": 11, "quantity": 1},
+                {"dish_id": 22, "quantity": 1},
+                {"dish_id": 33, "quantity": 2},
+            ]},
+            writes_database=True,
+        )],
+    )
+    state = {"user_id": 1, "session_id": "s1", "recent_action_ids": [], "tool_results": []}
+
+    with patch("service.tools.cart_tool.add_to_cart_tool", return_value={
+        "success": True,
+        "items": [
+            {"success": True, "dish_id": 11, "quantity": 1},
+            {"success": True, "dish_id": 22, "quantity": 1},
+            {"success": True, "dish_id": 33, "quantity": 2},
+        ],
+    }), patch("service.action_journal_service.ActionJournalService", return_value=_mock_journal()):
+        result = executor.execute_action(plan, state)
+
+    assert result["success"] is True
+    assert "3 道菜品" in result["message"]
+    assert "action_id" in result
+
+
+def test_execute_add_to_cart_evidence_bridge_batch():
+    """When dish_id is omitted and multiple dish evidence exists, bridge to batch."""
+    executor = LocalActionExecutor(session=FakeSession())
+
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[GraphToolCall(
+            tool_name="add_to_cart",
+            arguments={},
+            writes_database=True,
+        )],
+    )
+    state = {
+        "user_id": 1,
+        "session_id": "s1",
+        "recent_action_ids": [],
+        "tool_results": [],
+        "recent_evidence": [
+            {"source_type": "dish", "facts": {"dish_id": 100}},
+            {"source_type": "dish", "facts": {"dish_id": 200}},
+        ],
+    }
+
+    with patch("service.tools.cart_tool.add_to_cart_tool", return_value={
+        "success": True,
+        "items": [
+            {"success": True, "dish_id": 100, "quantity": 1},
+            {"success": True, "dish_id": 200, "quantity": 1},
+        ],
+    }), patch("service.action_journal_service.ActionJournalService", return_value=_mock_journal()):
+        result = executor.execute_action(plan, state)
+
+    assert result["success"] is True
+    assert "2 道菜品" in result["message"]

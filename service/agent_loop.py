@@ -48,15 +48,25 @@ class AgentLoop:
         self.tool_registry.register(
             ToolSchema(
                 name="add_to_cart",
-                description="Add a dish to the user's shopping cart",
+                description="Add one or more dishes to the user's shopping cart",
                 parameters={
                     "type": "object",
                     "properties": {
                         "user_id": {"type": "integer"},
                         "dish_id": {"type": "integer"},
                         "quantity": {"type": "integer", "default": 1},
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "dish_id": {"type": "integer"},
+                                    "quantity": {"type": "integer", "default": 1},
+                                },
+                                "required": ["dish_id"],
+                            },
+                        },
                     },
-                    "required": ["user_id", "dish_id"],
                 },
             ),
             lambda **kwargs: add_to_cart_tool(session=self.session, **kwargs),

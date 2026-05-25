@@ -50,21 +50,32 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "add_to_cart",
-            "description": "将指定菜品加入用户购物车",
+            "description": "将菜品加入用户购物车。支持单个(dish_id)或批量(items)模式",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "dish_id": {
                         "type": "integer",
-                        "description": "菜品ID",
+                        "description": "单个菜品ID（与items二选一）",
                     },
                     "quantity": {
                         "type": "integer",
                         "description": "数量",
                         "default": 1,
                     },
+                    "items": {
+                        "type": "array",
+                        "description": "批量添加菜品列表，如[{\"dish_id\":123,\"quantity\":1}]",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "dish_id": {"type": "integer"},
+                                "quantity": {"type": "integer", "default": 1},
+                            },
+                            "required": ["dish_id"],
+                        },
+                    },
                 },
-                "required": ["dish_id"],
             },
         },
     },

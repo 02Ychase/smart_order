@@ -27,6 +27,10 @@ from service.config import get_config
 
 logger = logging.getLogger(__name__)
 
+# Minimum candidates RAG should return so the respond-node LLM can
+# pick the best match even when the user asks for just one dish.
+RAG_EVIDENCE_FLOOR = 3
+
 # ── Module-level shared RAG result cache (thread-safe) ──────────────
 _rag_cache: OrderedDict[str, tuple[float, list[dict[str, Any]]]] = OrderedDict()
 _rag_cache_lock = threading.Lock()
@@ -362,13 +366,15 @@ class AdvancedRagRetriever:
 
         * User didn't specify a count → return *default*.
         * User specified a count → honour it, but cap at *max_limit*.
+        * Always return at least RAG_EVIDENCE_FLOOR so the respond-node
+          LLM has enough candidates to pick the best match from.
         """
         raw_limit = (plan.should_filters or {}).get("limit")
         try:
             parsed = int(raw_limit)
         except (TypeError, ValueError):
             return default
-        return max(1, min(parsed, max_limit))
+        return max(RAG_EVIDENCE_FLOOR, min(parsed, max_limit))
 
     @staticmethod
     def _apply_result_ordering(candidates: list[FusedCandidate], plan) -> list[FusedCandidate]:

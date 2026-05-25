@@ -5,21 +5,34 @@ from service.cart_service import CartService
 
 def add_to_cart_tool(
     user_id: int,
-    dish_id: int,
+    dish_id: int | None = None,
     quantity: int = 1,
+    items: list[dict] | None = None,
     session=None,
     _cart_service=None,
 ) -> dict:
-    """Add a dish to the user's shopping cart.
+    """Add one or more dishes to the user's shopping cart.
 
-    Args:
-        user_id: The user's ID
-        dish_id: The dish ID to add
-        quantity: Number of portions (default 1)
-        session: SQLAlchemy session (injected by caller)
-        _cart_service: Optional mock for testing
+    Supports two modes:
+    - Single: ``dish_id=123, quantity=1``
+    - Batch:  ``items=[{"dish_id": 123, "quantity": 1}, ...]``
+
+    When *items* is provided, *dish_id* / *quantity* are ignored.
     """
     service = _cart_service or CartService(session)
+
+    if items:
+        results = []
+        for item in items:
+            payload = SimpleNamespace(
+                dish_id=int(item["dish_id"]),
+                quantity=int(item.get("quantity", 1)),
+            )
+            results.append(service.add_item(user_id, payload))
+        return {"success": True, "items": results}
+
+    if dish_id is None:
+        return {"success": False, "message": "缺少 dish_id 或 items 参数"}
     payload = SimpleNamespace(dish_id=dish_id, quantity=quantity)
     return service.add_item(user_id, payload)
 

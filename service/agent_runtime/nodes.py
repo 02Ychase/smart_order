@@ -6,6 +6,7 @@ from langchain_core.runnables import RunnableConfig
 
 from service.agent_runtime.planner import ACTION_TOOL_NAMES, RAG_TOOL_NAMES, LangGraphAgentPlanner
 from service.agent_runtime.runtime import get_runtime
+from service.agent_runtime.state import AgentPlan, GraphToolCall
 from service.rag.retriever import AdvancedRagRetriever
 
 logger = logging.getLogger(__name__)
@@ -574,24 +575,70 @@ class LocalActionExecutor:
         if call.tool_name == "add_to_cart":
             from service.tools.cart_tool import add_to_cart_tool
 
+            items = call.arguments.get("items")
             dish_id = call.arguments.get("dish_id")
             quantity = call.arguments.get("quantity", 1)
 
+            # --- Batch mode: items=[{dish_id, quantity}, ...] ---
+            if items:
+                add_result = add_to_cart_tool(
+                    user_id=user_id, items=items, session=self.session,
+                )
+                after_snapshot = [
+                    {"dish_id": int(it["dish_id"]), "quantity": int(it.get("quantity", 1))}
+                    for it in items
+                ]
+                dish_count = len(items)
+                summary = f"已将 {dish_count} 道菜品加入购物车"
+                journal = ActionJournalService(self.session).record_completed_action(
+                    session_id=session_id,
+                    user_id=user_id,
+                    action_type="add_to_cart",
+                    undo_policy="remove_item",
+                    before_snapshot={},
+                    after_snapshot={"items": after_snapshot},
+                    undo_tool="remove_from_cart",
+                    natural_summary=summary,
+                )
+                action_id = self._record_value(journal, "action_id")
+                return {
+                    "success": True,
+                    "action_id": action_id,
+                    "message": summary,
+                    "undo_available": True,
+                    "data": add_result,
+                }
+
+            # --- Single mode: dish_id=X ---
             # Evidence bridging fallback: if LLM omitted dish_id, pick from evidence.
-            # Use index-based mapping: the Nth pending add_to_cart maps to the Nth dish evidence.
             if dish_id is None:
                 dish_evidence = [
                     e for e in state.get("recent_evidence", [])
                     if e.get("source_type") == "dish"
                 ]
                 if dish_evidence:
-                    # Count how many add_to_cart calls already completed
-                    completed_cart_count = sum(
-                        1 for r in state.get("tool_results", [])
-                        if r.get("type") == "add_to_cart" and r.get("success")
-                    )
-                    ev_index = min(completed_cart_count, len(dish_evidence) - 1)
-                    dish_id = dish_evidence[ev_index].get("facts", {}).get("dish_id")
+                    # Batch-bridge: collect ALL dish evidence into items
+                    if len(dish_evidence) > 1:
+                        bridge_items = [
+                            {"dish_id": e.get("facts", {}).get("dish_id"), "quantity": 1}
+                            for e in dish_evidence
+                            if e.get("facts", {}).get("dish_id") is not None
+                        ]
+                        if bridge_items:
+                            return self.execute_action(
+                                AgentPlan(
+                                    intent=plan.intent,
+                                    tool_calls=[GraphToolCall(
+                                        tool_name="add_to_cart",
+                                        arguments={"items": bridge_items},
+                                        writes_database=True,
+                                        step_id=call.step_id,
+                                    )],
+                                ),
+                                state,
+                            )
+                    # Single evidence fallback
+                    dish_id = dish_evidence[0].get("facts", {}).get("dish_id")
 
             if dish_id is None:
                 return {
@@ -610,13 +657,13 @@ class LocalActionExecutor:
                 before_snapshot={},
                 after_snapshot={"dish_id": dish_id, "quantity": quantity},
                 undo_tool="remove_from_cart",
-                natural_summary=f"已将菜品加入购物车",
+                natural_summary="已将菜品加入购物车",
             )
             action_id = self._record_value(journal, "action_id")
             return {
                 "success": True,
                 "action_id": action_id,
-                "message": f"已将菜品加入购物车",
+                "message": "已将菜品加入购物车",
                 "undo_available": True,
                 "data": add_result,
             }
@@ -865,10 +912,11 @@ def respond_node(state: dict, config: RunnableConfig | None = None) -> dict:
             output_result = OutputGuardrail().check(message, evidence)
             if not output_result.allowed:
                 logger.warning("Output guardrail triggered: %s, falling back to template", output_result.reason)
-                message = _append_action_confirmations(
-                    _template_recommendation(recommendations),
-                    tool_results,
-                )
+                message = _template_recommendation(recommendations)
+        # Always append structured action confirmations as an operation
+        # receipt — even if the LLM already mentioned actions in prose,
+        # the bullet-list summary gives users a scannable confirmation.
+        message = _append_action_confirmations(message, tool_results)
 
     payload = {
         "session_id": state.get("session_id"),

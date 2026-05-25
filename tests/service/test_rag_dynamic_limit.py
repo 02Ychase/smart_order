@@ -51,14 +51,20 @@ def test_output_limit_user_limit_exceeds_max_capped() -> None:
     assert AdvancedRagRetriever._output_limit(plan, default=5, max_limit=20) == 20
 
 
-def test_output_limit_user_limit_zero_returns_one() -> None:
+def test_output_limit_user_limit_zero_returns_floor() -> None:
     plan = FakePlan(should_filters={"limit": 0})
-    assert AdvancedRagRetriever._output_limit(plan, default=5, max_limit=20) == 1
+    assert AdvancedRagRetriever._output_limit(plan, default=5, max_limit=20) == 3
 
 
-def test_output_limit_user_limit_negative_returns_one() -> None:
+def test_output_limit_user_limit_negative_returns_floor() -> None:
     plan = FakePlan(should_filters={"limit": -3})
-    assert AdvancedRagRetriever._output_limit(plan, default=5, max_limit=20) == 1
+    assert AdvancedRagRetriever._output_limit(plan, default=5, max_limit=20) == 3
+
+
+def test_output_limit_user_limit_one_returns_floor() -> None:
+    """Even when user says 'one', RAG returns at least RAG_EVIDENCE_FLOOR candidates."""
+    plan = FakePlan(should_filters={"limit": 1})
+    assert AdvancedRagRetriever._output_limit(plan, default=5, max_limit=20) == 3
 
 
 def test_output_limit_user_limit_non_integer_returns_default() -> None:
