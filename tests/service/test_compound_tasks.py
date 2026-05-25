@@ -534,8 +534,8 @@ def test_call_scoped_plan_no_filter_leakage():
     assert coffee_scoped.normalized_query == "咖啡"
 
 
-def test_evidence_bridging_fallback_for_add_to_cart():
-    """When LLM omits dish_id, action executor should fall back to evidence."""
+def test_evidence_bridging_removed_for_add_to_cart():
+    """Evidence bridging removed: missing items+dish_id should fail, not bridge from evidence."""
     plan = AgentPlan(
         intent="cart_action",
         tool_calls=[
@@ -553,19 +553,10 @@ def test_evidence_bridging_fallback_for_add_to_cart():
     }
     executor = LocalActionExecutor(session=None)
 
-    with patch("service.tools.cart_tool.add_to_cart_tool", return_value={"item_id": 1}) as mock_tool, \
-         patch("service.action_journal_service.ActionJournalService") as mock_journal_cls:
-        mock_journal = MagicMock()
-        mock_journal.record_completed_action.return_value = {"action_id": "act_1"}
-        mock_journal_cls.return_value = mock_journal
+    result = executor.execute_action(plan, state)
 
-        result = executor.execute_action(plan, state)
-
-    assert result["success"] is True
-    # The tool should have been called with dish_id=12 (first from evidence)
-    mock_tool.assert_called_once()
-    _, call_kwargs = mock_tool.call_args
-    assert call_kwargs["dish_id"] == 12
+    assert result["success"] is False
+    assert "items" in result["message"]
 
 
 def test_unfulfilled_action_intent_triggers_replan():

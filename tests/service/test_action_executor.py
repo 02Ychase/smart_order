@@ -142,8 +142,96 @@ def test_execute_batch_add_to_cart():
     assert "action_id" in result
 
 
-def test_execute_add_to_cart_evidence_bridge_batch():
-    """When dish_id is omitted and multiple dish evidence exists, bridge to batch."""
+def test_execute_add_to_cart_items_batch():
+    """Batch add_to_cart with items list should work and report correct count."""
+    executor = LocalActionExecutor(session=FakeSession())
+
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[GraphToolCall(
+            tool_name="add_to_cart",
+            arguments={"items": [
+                {"dish_id": 11, "quantity": 1},
+                {"dish_id": 22, "quantity": 2},
+            ]},
+            writes_database=True,
+        )],
+    )
+    state = {"user_id": 1, "session_id": "s1", "recent_action_ids": [], "tool_results": []}
+
+    with patch("service.tools.cart_tool.add_to_cart_tool", return_value={
+        "success": True,
+        "items": [
+            {"success": True, "dish_id": 11, "quantity": 1},
+            {"success": True, "dish_id": 22, "quantity": 2},
+        ],
+    }) as mock_tool, patch("service.action_journal_service.ActionJournalService", return_value=_mock_journal()):
+        result = executor.execute_action(plan, state)
+
+    assert result["success"] is True
+    assert "2 道菜品" in result["message"]
+    # Verify called with items= kwarg
+    _, call_kwargs = mock_tool.call_args
+    assert "items" in call_kwargs
+
+
+def test_execute_add_to_cart_old_format_normalizes_to_items():
+    """Old dish_id+quantity format should be normalized to items=[{...}]."""
+    executor = LocalActionExecutor(session=FakeSession())
+
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[GraphToolCall(
+            tool_name="add_to_cart",
+            arguments={"dish_id": 11, "quantity": 2},
+            writes_database=True,
+        )],
+    )
+    state = {"user_id": 1, "session_id": "s1", "recent_action_ids": [], "tool_results": []}
+
+    with patch("service.tools.cart_tool.add_to_cart_tool", return_value={
+        "success": True,
+    }) as mock_tool, patch("service.action_journal_service.ActionJournalService", return_value=_mock_journal()):
+        result = executor.execute_action(plan, state)
+
+    assert result["success"] is True
+    assert "1 道菜品" in result["message"]
+    # Verify normalized: called with items=[{dish_id:11, quantity:2}]
+    _, call_kwargs = mock_tool.call_args
+    assert "items" in call_kwargs
+    assert call_kwargs["items"] == [{"dish_id": 11, "quantity": 2}]
+
+
+def test_execute_add_to_cart_empty_items_fails():
+    """Empty items list should fail, even when evidence exists (no bridging)."""
+    executor = LocalActionExecutor(session=FakeSession())
+
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[GraphToolCall(
+            tool_name="add_to_cart",
+            arguments={"items": []},
+            writes_database=True,
+        )],
+    )
+    state = {
+        "user_id": 1,
+        "session_id": "s1",
+        "recent_action_ids": [],
+        "tool_results": [],
+        "recent_evidence": [
+            {"source_type": "dish", "facts": {"dish_id": 100}},
+        ],
+    }
+
+    result = executor.execute_action(plan, state)
+
+    assert result["success"] is False
+    assert "items" in result["message"]
+
+
+def test_execute_add_to_cart_no_dish_id_no_items_fails():
+    """Missing both items and dish_id should fail, even when evidence exists."""
     executor = LocalActionExecutor(session=FakeSession())
 
     plan = AgentPlan(
@@ -165,14 +253,6 @@ def test_execute_add_to_cart_evidence_bridge_batch():
         ],
     }
 
-    with patch("service.tools.cart_tool.add_to_cart_tool", return_value={
-        "success": True,
-        "items": [
-            {"success": True, "dish_id": 100, "quantity": 1},
-            {"success": True, "dish_id": 200, "quantity": 1},
-        ],
-    }), patch("service.action_journal_service.ActionJournalService", return_value=_mock_journal()):
-        result = executor.execute_action(plan, state)
+    result = executor.execute_action(plan, state)
 
-    assert result["success"] is True
-    assert "2 道菜品" in result["message"]
+    assert result["success"] is False
