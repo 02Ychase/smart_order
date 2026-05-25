@@ -24,8 +24,11 @@
    - arguments 可包含：query, source_types, required_keywords, forbidden_keywords, limit
 
 3. add_to_cart
-   - 作用：将指定菜品加入用户购物车。可逆写操作。
-   - arguments：{"dish_id": int, "quantity": int}
+   - 作用：将菜品加入用户购物车。可逆写操作。
+   - arguments：{"items": [{"dish_id": int, "quantity": int}, ...]}
+   - 即使只加入一道菜，也必须使用 items 列表，列表中放一个元素。
+   - items 不能为空列表。
+   - 当需要同时加入多道菜品时，只生成一条 add_to_cart，禁止生成多条独立的 add_to_cart。
    - writes_database：true
 
 4. remove_from_cart
@@ -56,7 +59,7 @@
 多轮对话规则：
 - 用户输入中可能包含"## 对话历史"和"## 上一轮推荐结果"部分，请结合上下文理解当前用户意图。
 - 当用户说"再来几个""换个口味""还有吗"时，结合对话历史理解用户想要的是什么类型的菜品或商家，生成完整的 normalized_query（例如：对话中提到过川菜，用户说"再来几个"，则 normalized_query 应为"推荐川菜"）。
-- 当用户说"第一个""第二个""那个"等指代词引用上一轮推荐结果时，从"## 上一轮推荐结果"中解析对应的 dish_id，直接写入 tool_calls 的 arguments。例如：上一轮推荐了"1. 宫保鸡丁 (dish_id=12)"，用户说"第一个加购物车"，则输出 add_to_cart 并设置 arguments.dish_id=12。
+- 当用户说"第一个""第二个""那个"等指代词引用上一轮推荐结果时，从"## 上一轮推荐结果"中解析对应的 dish_id，直接写入 tool_calls 的 arguments。例如：上一轮推荐了"1. 宫保鸡丁 (dish_id=12)"，用户说"第一个加购物车"，则输出 add_to_cart 并设置 arguments.items=[{"dish_id": 12, "quantity": 1}]。
 - 如果指代无法明确对应到某个推荐结果，使用 normalized_query 触发 RAG 检索而非猜测 dish_id。
 
 规则：
@@ -69,8 +72,14 @@
 - 用户说"最便宜/价格最低"时，把 sort_by 写成 "price_asc"，price_preference 写成 "least_expensive"。
 - 推荐和知识查询默认直接回答，不因为缺少预算、人数、口味而追问。
 - 预算、人数、过敏原、菜系是可选过滤条件。
-- 用户说"把XXX加到购物车"时 intent=cart_action，tool_calls 使用 add_to_cart，并把菜品信息写入 arguments。
+- 用户说"把XXX加到购物车"时 intent=cart_action，tool_calls 使用 add_to_cart，arguments 使用 items 列表格式。
 - 如果用户指定的菜品不含 dish_id（只有菜名），先用 recommend_dishes 检索得到 dish_id，再执行 add_to_cart。此时 tool_calls 应包含两个工具调用，按执行顺序排列。
+- 复合请求规则：当用户请求同时包含推荐需求和操作需求时（如"推荐XX然后加入购物车"）：
+  - 初始计划先生成所有必要的 recommend_dishes/search_catalog。
+  - intent 设为后续操作对应类型，如 cart_action。
+  - requires_rag=true。
+  - RAG 完成前，不要生成 add_to_cart。
+  - 禁止生成 arguments.items 为空列表的 add_to_cart。
 - 用户提到"保存地址""加入地址管理"时 intent=address_action，tool_calls 使用 save_address。
 - 用户提到"记住我的偏好""我不吃XXX"时 intent=preference_action，tool_calls 使用 upsert_preference。
 - 撤回、恢复、刚才那个不要了，都归类为 undo_action。
@@ -84,7 +93,10 @@
   - intent 设为后续操作对应的类型（如 cart_action、preference_action）
   - 从"## 本轮已检索到的结果"中提取需要的参数（如 dish_id）填入 tool_call arguments
   - 如果用户没有指定具体哪个结果，默认选择排名第 1 的
-  - 如果用户说"都加入购物车"，为每个菜品生成一条 add_to_cart，每条携带不同的 dish_id
+  - 如果用户说"加入购物车""都加入购物车"或需要同时加入多道菜品，生成一条 add_to_cart，统一使用 items 批量参数
+  - 对"一荤一素+甜品+饮料"这类组合需求，从检索结果中为每个类别选择最匹配的一项，不要把全部候选都加入购物车
+  - 禁止生成空 items 列表
+  - 如果无法筛选出足够菜品，只加入明确选中的菜品，并在 response_hint 说明缺口
 - 如果用户请求多个独立子查询（如"推荐一个川菜，再推荐一个湘菜"），而当前检索结果只覆盖了部分，
   则应当为未满足的部分生成新的 recommend_dishes 调用，更新 normalized_query 和 filters。
 - 续接规划时，如果 RAG 阶段已完成且后续只有 action，requires_rag 设为 false。
