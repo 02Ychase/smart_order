@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from langchain_core.messages import HumanMessage
 
 from service.agent_runtime.graph import build_agent_graph
-from service.agent_runtime.nodes import LocalActionExecutor, _normalize_tool_result, evaluate_node, plan_node, rag_node, respond_node
+from service.agent_runtime.nodes import LocalActionExecutor, _normalize_tool_result, evaluate_node, plan_node, rag_node, respond_node, route_after_plan
 from service.agent_runtime.planner import ACTION_TOOL_NAMES, LangGraphAgentPlanner
 from service.agent_runtime.runtime import AgentRuntimeContext
 from service.agent_runtime.state import AgentPlan, GraphToolCall
@@ -762,6 +762,83 @@ def test_respond_node_passes_response_hint_to_llm():
         respond_node(state)
 
     assert captured_kwargs["response_hint"] == "推荐辣椒炒肉作为荤菜，总价约50元"
+
+
+def test_compound_request_batch_rag_and_batch_cart():
+    """Full flow: compound request should batch RAG → replan → batch add_to_cart."""
+    # Phase 1: Initial plan with 2 RAG calls
+    initial_plan = AgentPlan(
+        intent="cart_action",
+        normalized_query="川菜荤菜和甜品",
+        requires_rag=True,
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "川菜荤菜", "cuisine_types": ["川菜"]}, False, step_id="recommend_dishes_0"),
+            GraphToolCall("recommend_dishes", {"query": "甜品", "required_keywords": ["甜品"]}, False, step_id="recommend_dishes_1"),
+        ],
+    )
+
+    state_before_rag = {
+        "messages": [HumanMessage(content="推荐一个川菜荤菜和一个甜品，加入购物车")],
+        "current_plan": initial_plan,
+        "tool_results": [],
+        "recent_evidence": [],
+        "loaded_user_memories": [],
+        "iteration_count": 0,
+        "max_iterations": 5,
+        "metrics": {},
+        "session_id": "s1",
+        "user_id": 1,
+    }
+
+    # route_after_plan should send to rag (first remaining call is recommend_dishes)
+    assert route_after_plan(state_before_rag) == "rag"
+
+    # Simulate batch RAG completion (both calls done in one pass)
+    state_after_rag = {
+        **state_before_rag,
+        "tool_results": [
+            {"type": "recommend_dishes", "step_id": "recommend_dishes_0", "success": True, "message": "3 results", "data": {}},
+            {"type": "recommend_dishes", "step_id": "recommend_dishes_1", "success": True, "message": "3 results", "data": {}},
+        ],
+        "recent_evidence": [
+            {"source_type": "dish", "source_id": 100, "facts": {"dish_id": 100, "cuisine_type": "川菜"}},
+            {"source_type": "dish", "source_id": 200, "facts": {"dish_id": 200, "cuisine_type": "甜品"}},
+        ],
+        "iteration_count": 0,
+    }
+
+    # evaluate should detect unfulfilled action intent → plan
+    eval_result = evaluate_node(state_after_rag)
+    assert eval_result["_next"] == "plan"
+
+    # Phase 2: Replan produces batch add_to_cart with items list
+    cart_plan = AgentPlan(
+        intent="cart_action",
+        requires_rag=False,
+        tool_calls=[
+            GraphToolCall("add_to_cart", {
+                "items": [{"dish_id": 100, "quantity": 1}, {"dish_id": 200, "quantity": 1}]
+            }, True, step_id="add_to_cart_0"),
+        ],
+    )
+
+    state_after_replan = {**state_after_rag, "current_plan": cart_plan}
+
+    # route_after_plan should send to action (first remaining call is add_to_cart)
+    assert route_after_plan(state_after_replan) == "action"
+
+    # Phase 3: After action completes
+    state_after_action = {
+        **state_after_replan,
+        "tool_results": state_after_rag["tool_results"] + [
+            {"type": "add_to_cart", "step_id": "add_to_cart_0", "success": True, "message": "已将 2 道菜品加入购物车", "data": {}},
+        ],
+        "iteration_count": 2,
+    }
+
+    # evaluate should see all steps done → respond
+    eval_result2 = evaluate_node(state_after_action)
+    assert eval_result2["_next"] == "respond"
 
 
 # ── Integration Test Helpers ──────────────────────────────────────────
