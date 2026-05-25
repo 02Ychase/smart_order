@@ -441,6 +441,8 @@ def _build_call_scoped_plan(plan, call_args):
 
 
 def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
+    from concurrent.futures import ThreadPoolExecutor
+
     from service.config import get_config
 
     runtime = get_runtime(config)
@@ -449,77 +451,95 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
     rag_cfg = get_config().rag
     plan = state["current_plan"]
 
-    # Find the NEXT pending RAG call (single-step execution)
+    # Collect ALL pending RAG calls (batch execution)
     completed_step_ids = {
         r.get("step_id") or r.get("type", "")
         for r in state.get("tool_results", [])
     }
-    next_rag_call = next(
-        (c for c in plan.tool_calls
-         if c.tool_name in RAG_TOOL_NAMES and c.step_id not in completed_step_ids),
-        None,
-    )
+    pending_rag_calls = [
+        c for c in plan.tool_calls
+        if c.tool_name in RAG_TOOL_NAMES and c.step_id not in completed_step_ids
+    ]
 
-    if next_rag_call is None:
+    if not pending_rag_calls:
         # Fallback: plan has requires_rag but no explicit RAG tool_calls.
         # Use plan's normalized_query directly (backward compatible).
         if plan.requires_rag and not any(r.get("type", "") in RAG_TOOL_NAMES for r in state.get("tool_results", [])):
-            effective_query = plan.normalized_query or latest_user_message(state)
-            call_plan = plan
-            synthetic_step_id = "recommend_dishes_0"
+            pending_rag_calls = [None]  # sentinel for legacy fallback
         else:
             return {}  # No pending RAG call
-    else:
-        # Use this call's arguments to determine retrieval parameters
-        call_args = next_rag_call.arguments or {}
-        effective_query = (
-            call_args.get("query")
-            or plan.normalized_query
-            or latest_user_message(state)
+
+    memories = state.get("loaded_user_memories", [])
+
+    def _execute_single_call(rag_call):
+        """Execute a single RAG retrieval call. Returns (step_id, tool_name, serialized)."""
+        if rag_call is None:
+            # Legacy fallback path
+            effective_query = plan.normalized_query or latest_user_message(state)
+            call_plan = plan
+            step_id = "recommend_dishes_0"
+            tool_name = "recommend_dishes"
+        else:
+            call_args = rag_call.arguments or {}
+            effective_query = (
+                call_args.get("query")
+                or plan.normalized_query
+                or latest_user_message(state)
+            )
+            call_plan = _build_call_scoped_plan(plan, call_args)
+            step_id = rag_call.step_id
+            tool_name = rag_call.tool_name
+
+        evidence = retriever.retrieve(
+            effective_query,
+            agent_plan=call_plan,
+            memories=memories,
+            limit=rag_cfg.output_limit_default,
+            max_limit=rag_cfg.output_limit_max,
         )
-        # Build a scoped plan with this call's filters
-        call_plan = _build_call_scoped_plan(plan, call_args)
-        synthetic_step_id = next_rag_call.step_id
+        serialized = [
+            {
+                "source_type": item.source_type,
+                "source_id": item.source_id,
+                "merchant_id": item.merchant_id,
+                "title": item.title,
+                "facts": item.facts,
+                "why_matched": item.why_matched,
+                "citation": item.citation,
+                "score": item.score,
+            }
+            for item in evidence
+        ]
+        return step_id, tool_name, serialized
 
-    evidence = retriever.retrieve(
-        effective_query,
-        agent_plan=call_plan,
-        memories=state.get("loaded_user_memories", []),
-        limit=rag_cfg.output_limit_default,
-        max_limit=rag_cfg.output_limit_max,
-    )
-    serialized = [
-        {
-            "source_type": item.source_type,
-            "source_id": item.source_id,
-            "merchant_id": item.merchant_id,
-            "title": item.title,
-            "facts": item.facts,
-            "why_matched": item.why_matched,
-            "citation": item.citation,
-            "score": item.score,
-        }
-        for item in evidence
-    ]
+    # Execute: skip ThreadPoolExecutor for single call
+    if len(pending_rag_calls) == 1:
+        call_results = [_execute_single_call(pending_rag_calls[0])]
+    else:
+        max_workers = min(4, len(pending_rag_calls))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            call_results = list(pool.map(_execute_single_call, pending_rag_calls))
 
-    # Evidence accumulation — append, don't replace
+    # Merge evidence with deduplication by (source_type, source_id)
     existing_evidence = list(state.get("recent_evidence", []))
     seen_keys = {(e.get("source_type"), e.get("source_id")) for e in existing_evidence}
-    for item in serialized:
-        key = (item["source_type"], item["source_id"])
-        if key not in seen_keys:
-            existing_evidence.append(item)
-            seen_keys.add(key)
+    for _step_id, _tool_name, serialized in call_results:
+        for item in serialized:
+            key = (item["source_type"], item["source_id"])
+            if key not in seen_keys:
+                existing_evidence.append(item)
+                seen_keys.add(key)
 
-    # Mark only THIS step complete
+    # Mark all executed steps complete
     existing_results = list(state.get("tool_results", []))
-    existing_results.append({
-        "type": next_rag_call.tool_name if next_rag_call else "recommend_dishes",
-        "step_id": synthetic_step_id,
-        "success": True,
-        "message": f"检索到 {len(serialized)} 条结果",
-        "data": {},
-    })
+    for step_id, tool_name, serialized in call_results:
+        existing_results.append({
+            "type": tool_name,
+            "step_id": step_id,
+            "success": True,
+            "message": f"检索到 {len(serialized)} 条结果",
+            "data": {},
+        })
 
     return {"recent_evidence": existing_evidence, "tool_results": existing_results}
 

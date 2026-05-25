@@ -297,8 +297,8 @@ def _make_rag_runtime(retriever):
     return mock_runtime
 
 
-def test_rag_node_single_step_execution():
-    """rag_node should only execute the NEXT pending RAG call, not all of them."""
+def test_rag_node_batch_execution():
+    """rag_node should batch-execute ALL pending RAG calls in one invocation."""
     plan = AgentPlan(
         intent="recommendation",
         normalized_query="川菜",
@@ -329,11 +329,113 @@ def test_rag_node_single_step_execution():
         mock_cfg.return_value.rag.output_limit_max = 10
         result = rag_node(state)
 
-    # Should only mark recommend_dishes_0 complete
+    # Both calls should complete in one invocation (batch behavior)
     completed_step_ids = {r["step_id"] for r in result["tool_results"]}
     assert "recommend_dishes_0" in completed_step_ids
-    assert "recommend_dishes_1" not in completed_step_ids
-    assert len(retriever.calls) == 1
+    assert "recommend_dishes_1" in completed_step_ids
+    assert len(retriever.calls) == 2
+
+
+def test_rag_node_batch_executes_all_pending_calls():
+    """rag_node should batch-execute all 3 pending RAG calls in a single invocation."""
+    plan = AgentPlan(
+        intent="recommendation",
+        normalized_query="推荐菜品",
+        requires_rag=True,
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "川菜", "cuisine_types": ["川菜"]}, False, step_id="recommend_dishes_0"),
+            GraphToolCall("recommend_dishes", {"query": "素菜", "required_keywords": ["素"]}, False, step_id="recommend_dishes_1"),
+            GraphToolCall("recommend_dishes", {"query": "甜品", "cuisine_types": ["甜品"]}, False, step_id="recommend_dishes_2"),
+        ],
+    )
+
+    # Each call returns a different item (the retriever returns all 3 regardless,
+    # but deduplication ensures each unique item appears once)
+    items = [
+        StubEvidenceItem("dish", 10, 1, "宫保鸡丁", {"dish_id": 10}, ["川菜"], "川菜", 0.9),
+        StubEvidenceItem("dish", 20, 2, "清炒时蔬", {"dish_id": 20}, ["素菜"], "素菜", 0.8),
+        StubEvidenceItem("dish", 30, 3, "芒果布丁", {"dish_id": 30}, ["甜品"], "甜品", 0.7),
+    ]
+    retriever = FakeRetriever(items)
+
+    state = {
+        "current_plan": plan,
+        "tool_results": [],
+        "recent_evidence": [],
+        "loaded_user_memories": [],
+        "messages": [HumanMessage(content="推荐一荤一素加甜品")],
+    }
+
+    runtime = _make_rag_runtime(retriever)
+    with patch("service.agent_runtime.nodes.get_runtime", return_value=runtime), \
+         patch("service.config.get_config") as mock_cfg:
+        mock_cfg.return_value.rag.output_limit_default = 5
+        mock_cfg.return_value.rag.output_limit_max = 10
+        result = rag_node(state)
+
+    # All 3 step_ids should be completed
+    completed_step_ids = {r["step_id"] for r in result["tool_results"]}
+    assert completed_step_ids == {"recommend_dishes_0", "recommend_dishes_1", "recommend_dishes_2"}
+
+    # Retriever should have been called 3 times
+    assert len(retriever.calls) == 3
+
+    # Evidence should contain items from all 3 calls (deduplicated)
+    evidence_ids = {e["source_id"] for e in result["recent_evidence"]}
+    assert evidence_ids == {10, 20, 30}
+
+
+def test_rag_node_batch_skips_already_completed_and_preserves_evidence():
+    """rag_node should skip already-completed steps and preserve existing evidence."""
+    plan = AgentPlan(
+        intent="recommendation",
+        normalized_query="推荐菜品",
+        requires_rag=True,
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "川菜"}, False, step_id="recommend_dishes_0"),
+            GraphToolCall("recommend_dishes", {"query": "湘菜"}, False, step_id="recommend_dishes_1"),
+        ],
+    )
+
+    hunan_item = StubEvidenceItem(
+        "dish", 20, 2, "剁椒鱼头",
+        {"dish_id": 20, "dish_name": "剁椒鱼头"},
+        ["湘菜"], "湘菜", 0.85,
+    )
+    retriever = FakeRetriever([hunan_item])
+
+    # Step 0 already completed; existing evidence from prior step
+    existing_evidence = [
+        {"source_type": "dish", "source_id": 12, "merchant_id": 1, "title": "宫保鸡丁",
+         "facts": {"dish_id": 12}, "why_matched": ["川菜"], "citation": "川菜", "score": 0.9},
+    ]
+    state = {
+        "current_plan": plan,
+        "tool_results": [
+            {"type": "recommend_dishes", "step_id": "recommend_dishes_0", "success": True, "message": "done", "data": {}},
+        ],
+        "recent_evidence": existing_evidence,
+        "loaded_user_memories": [],
+        "messages": [HumanMessage(content="推荐一个川菜，再推荐一个湘菜")],
+    }
+
+    runtime = _make_rag_runtime(retriever)
+    with patch("service.agent_runtime.nodes.get_runtime", return_value=runtime), \
+         patch("service.config.get_config") as mock_cfg:
+        mock_cfg.return_value.rag.output_limit_default = 5
+        mock_cfg.return_value.rag.output_limit_max = 10
+        result = rag_node(state)
+
+    # Only step 1 should be newly executed (step 0 was already done)
+    completed_step_ids = {r["step_id"] for r in result["tool_results"]}
+    assert "recommend_dishes_0" in completed_step_ids  # preserved from state
+    assert "recommend_dishes_1" in completed_step_ids  # newly completed
+    assert len(retriever.calls) == 1  # only 1 new call
+
+    # Old evidence preserved alongside new evidence
+    evidence_ids = {e["source_id"] for e in result["recent_evidence"]}
+    assert 12 in evidence_ids  # old
+    assert 20 in evidence_ids  # new
 
 
 def test_rag_node_evidence_accumulation():
