@@ -635,6 +635,52 @@ def test_unfulfilled_retrieval_intent_multi_cuisine():
     assert result["_next"] == "plan"
 
 
+def test_evaluate_node_grace_for_pending_action():
+    """When max_iterations reached but pending action exists, should continue to plan."""
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "川菜"}, False, step_id="recommend_dishes_0"),
+            GraphToolCall("add_to_cart", {"items": [{"dish_id": 12, "quantity": 1}]}, True, step_id="add_to_cart_0"),
+        ],
+    )
+    state = {
+        "messages": [HumanMessage(content="推荐川菜然后加购物车")],
+        "current_plan": plan,
+        "tool_results": [
+            {"type": "recommend_dishes", "step_id": "recommend_dishes_0", "success": True, "message": "done", "data": {}},
+        ],
+        "recent_evidence": [{"source_type": "dish", "source_id": 12, "facts": {"dish_id": 12}}],
+        "iteration_count": 4,  # Will become 5, equal to max_iterations
+        "max_iterations": 5,
+        "metrics": {},
+    }
+    result = evaluate_node(state)
+    # Should allow action to proceed, not force respond
+    assert result["_next"] == "plan"
+
+
+def test_evaluate_node_grace_expires():
+    """Grace iterations should be limited — eventually must respond."""
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[
+            GraphToolCall("add_to_cart", {"items": [{"dish_id": 12, "quantity": 1}]}, True, step_id="add_to_cart_0"),
+        ],
+    )
+    state = {
+        "messages": [HumanMessage(content="加购物车")],
+        "current_plan": plan,
+        "tool_results": [],
+        "recent_evidence": [],
+        "iteration_count": 6,  # Will become 7, max_iter=5, grace=2 → 5+2=7 → exhausted
+        "max_iterations": 5,
+        "metrics": {},
+    }
+    result = evaluate_node(state)
+    assert result["_next"] == "respond"
+
+
 def test_respond_merges_action_results_with_evidence():
     """When both evidence and action tool_results exist, response should mention both."""
     plan = AgentPlan(

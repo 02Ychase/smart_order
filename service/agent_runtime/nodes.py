@@ -348,28 +348,33 @@ def _has_unfulfilled_retrieval_intent(state: dict) -> bool:
 def evaluate_node(state: dict) -> dict:
     iteration = state.get("iteration_count", 0) + 1
     max_iter = state.get("max_iterations", 5)
-    logger.debug("Agent evaluate: iteration=%d/%d", iteration, max_iter)
+    grace = 2  # Extra iterations allowed for pending write operations
+    logger.debug("Agent evaluate: iteration=%d/%d (grace=%d)", iteration, max_iter, grace)
 
     # Merge iteration_count into cumulative metrics
     existing_metrics = dict(state.get("metrics") or {})
     existing_metrics["iteration_count"] = iteration
 
-    if iteration >= max_iter:
-        logger.debug("Agent evaluate: max iterations reached → respond")
-        return {"iteration_count": iteration, "_next": "respond", "metrics": existing_metrics}
-
     plan = state.get("current_plan")
-    if plan is None:
-        return {"iteration_count": iteration, "_next": "respond", "metrics": existing_metrics}
-
     completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
     pending_calls = [
-        call for call in plan.tool_calls
+        call for call in (plan.tool_calls if plan else [])
         if call.step_id not in completed_step_ids
     ]
-
     has_pending_action = any(call.tool_name in ACTION_TOOL_NAMES for call in pending_calls)
     has_pending_rag = any(call.tool_name in RAG_TOOL_NAMES for call in pending_calls)
+
+    if iteration >= max_iter:
+        # Grace: allow pending ACTIONS (writes) to proceed up to grace limit
+        if has_pending_action and iteration < max_iter + grace:
+            logger.debug("Agent evaluate: max iterations reached but pending action — grace iteration %d/%d",
+                         iteration - max_iter + 1, grace)
+            return {"iteration_count": iteration, "_next": "plan", "metrics": existing_metrics}
+        logger.debug("Agent evaluate: max iterations reached (grace exhausted) → respond")
+        return {"iteration_count": iteration, "_next": "respond", "metrics": existing_metrics}
+
+    if plan is None:
+        return {"iteration_count": iteration, "_next": "respond", "metrics": existing_metrics}
 
     if has_pending_rag:
         logger.debug("Agent evaluate: pending RAG calls → plan (re-route to rag)")
