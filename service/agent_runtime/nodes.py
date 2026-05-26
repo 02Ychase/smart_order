@@ -184,10 +184,7 @@ def plan_node(state: dict, config: RunnableConfig | None = None) -> dict:
     # This prevents step_id collision from counter-reset on re-planning.
     current_plan = state.get("current_plan")
     if current_plan and current_plan.tool_calls:
-        completed_step_ids = {
-            r.get("step_id") or r.get("type", "")
-            for r in state.get("tool_results", [])
-        }
+        completed_step_ids = _successful_step_ids(state)
         pending = [c for c in current_plan.tool_calls if c.step_id not in completed_step_ids]
         if pending:
             return {"current_plan": current_plan}
@@ -254,7 +251,7 @@ def route_after_plan(state: dict) -> str:
         return "respond"
 
     has_evidence = bool(state.get("recent_evidence"))
-    completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
+    completed_step_ids = _successful_step_ids(state)
     remaining_calls = [c for c in plan.tool_calls if c.step_id not in completed_step_ids]
 
     if has_evidence and plan.intent in {"recommendation", "knowledge"} and not any(
@@ -310,14 +307,17 @@ def _has_unfulfilled_intent(state: dict) -> bool:
 
 def _has_unfulfilled_action_intent(state: dict) -> bool:
     user_message = latest_user_message(state)
-    completed_action_tools = {
+    # An action is "resolved" if it succeeded OR failed non-retryably.
+    # Non-retryable failures should not cause the agent to loop.
+    resolved_action_tools = {
         r.get("type", "")
         for r in state.get("tool_results", [])
-        if r.get("success", False) and r.get("type", "") in ACTION_TOOL_NAMES
+        if r.get("type", "") in ACTION_TOOL_NAMES
+        and (r.get("success", False) or not r.get("retryable", False))
     }
     for tool_name, keywords in _ACTION_INTENT_MAPPING.items():
         if any(kw in user_message for kw in keywords):
-            if tool_name not in completed_action_tools:
+            if tool_name not in resolved_action_tools:
                 return True
     return False
 
@@ -345,6 +345,24 @@ def _has_unfulfilled_retrieval_intent(state: dict) -> bool:
     return not mentioned.issubset(covered)
 
 
+def _successful_step_ids(state: dict) -> set[str]:
+    """Return step_ids of tool results that are "done" and should NOT be retried.
+
+    A step is considered done if it either:
+    - Succeeded (``success=True`` or absent), OR
+    - Failed non-retryably (``retryable=False`` or absent when ``success=False``).
+
+    Only steps that **failed AND are explicitly marked retryable** remain
+    pending for retry.  This prevents deterministic failures (missing
+    params, dish-not-found) from looping until max_iterations.
+    """
+    return {
+        r.get("step_id") or r.get("type", "")
+        for r in state.get("tool_results", [])
+        if r.get("success", True) or not r.get("retryable", False)
+    }
+
+
 def evaluate_node(state: dict) -> dict:
     iteration = state.get("iteration_count", 0) + 1
     max_iter = state.get("max_iterations", 5)
@@ -356,7 +374,7 @@ def evaluate_node(state: dict) -> dict:
     existing_metrics["iteration_count"] = iteration
 
     plan = state.get("current_plan")
-    completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
+    completed_step_ids = _successful_step_ids(state)
     pending_calls = [
         call for call in (plan.tool_calls if plan else [])
         if call.step_id not in completed_step_ids
@@ -457,10 +475,7 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
     plan = state["current_plan"]
 
     # Collect ALL pending RAG calls (batch execution)
-    completed_step_ids = {
-        r.get("step_id") or r.get("type", "")
-        for r in state.get("tool_results", [])
-    }
+    completed_step_ids = _successful_step_ids(state)
     pending_rag_calls = [
         c for c in plan.tool_calls
         if c.tool_name in RAG_TOOL_NAMES and c.step_id not in completed_step_ids
@@ -469,7 +484,10 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
     if not pending_rag_calls:
         # Fallback: plan has requires_rag but no explicit RAG tool_calls.
         # Use plan's normalized_query directly (backward compatible).
-        if plan.requires_rag and not any(r.get("type", "") in RAG_TOOL_NAMES for r in state.get("tool_results", [])):
+        if plan.requires_rag and not any(
+            r.get("type", "") in RAG_TOOL_NAMES and r.get("success", True)
+            for r in state.get("tool_results", [])
+        ):
             pending_rag_calls = [None]  # sentinel for legacy fallback
         else:
             return {}  # No pending RAG call
@@ -533,6 +551,7 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
                 "type": _tool,
                 "step_id": _step,
                 "success": False,
+                "retryable": True,
                 "message": f"检索失败: {exc}",
                 "data": {},
             })
@@ -552,6 +571,7 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
                         "type": _tool,
                         "step_id": _step,
                         "success": False,
+                        "retryable": True,
                         "message": f"检索失败: {exc}",
                         "data": {},
                     })
@@ -597,7 +617,7 @@ class LocalActionExecutor:
 
         user_id = state.get("user_id")
         session_id = state.get("session_id")
-        completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
+        completed_step_ids = _successful_step_ids(state)
         call = next(
             (item for item in plan.tool_calls
              if item.tool_name in ACTION_TOOL_NAMES and item.step_id not in completed_step_ids),
@@ -646,18 +666,32 @@ class LocalActionExecutor:
                     "success": False,
                     "message": "缺少 items 参数",
                     "undo_available": False,
+                    "retryable": False,
                 }
 
             add_result = add_to_cart_tool(
                 user_id=user_id, items=items, session=self.session,
             )
             if not add_result.get("success", False):
+                msg = add_result.get("message", "加入购物车失败")
+                if add_result.get("rollback_failed"):
+                    failed_ids = add_result["rollback_failed"]
+                    msg += f"（注意：部分回滚失败 dish_id={failed_ids}，购物车可能已被部分修改，请检查）"
                 return {
                     "success": False,
-                    "message": add_result.get("message", "加入购物车失败"),
+                    "message": msg,
                     "undo_available": False,
+                    "retryable": False,
                     "data": add_result,
                 }
+
+            # Build before_snapshot from add_result.before_quantities
+            # (pre-add quantity per dish, 0 means item was new)
+            before_quantities = add_result.get("before_quantities", {})
+            before_snapshot_items = [
+                {"dish_id": int(it["dish_id"]), "quantity": before_quantities.get(int(it["dish_id"]), 0)}
+                for it in items
+            ]
             after_snapshot = [
                 {"dish_id": int(it["dish_id"]), "quantity": int(it.get("quantity", 1))}
                 for it in items
@@ -683,10 +717,10 @@ class LocalActionExecutor:
                 session_id=session_id,
                 user_id=user_id,
                 action_type="add_to_cart",
-                undo_policy="remove_item",
-                before_snapshot={},
+                undo_policy="quantity_restore",
+                before_snapshot={"items": before_snapshot_items},
                 after_snapshot={"items": after_snapshot},
-                undo_tool="remove_from_cart",
+                undo_tool="restore_cart_quantities",
                 natural_summary=summary,
             )
             action_id = self._record_value(journal, "action_id")
@@ -781,7 +815,9 @@ class LocalActionExecutor:
 
         action_type = self._record_value(record, "action_type")
         before_snapshot = self._record_value(record, "before_snapshot", {})
+        after_snapshot = self._record_value(record, "after_snapshot", {})
         action_id = self._record_value(record, "action_id")
+
         if action_type == "cart_clear":
             restore_cart_snapshot_tool(
                 user_id=user_id,
@@ -794,6 +830,43 @@ class LocalActionExecutor:
                 "action_id": action_id,
                 "message": "已撤回清空购物车",
             }
+
+        if action_type == "add_to_cart":
+            from service.cart_service import CartService
+
+            cart_service = CartService(self.session)
+            before_items = before_snapshot.get("items", []) if before_snapshot else []
+            # Build lookup: dish_id → pre-add quantity
+            before_qty_map = {int(bi["dish_id"]): int(bi.get("quantity", 0)) for bi in before_items}
+
+            restored = []
+            failed_restore = []
+            for item in after_snapshot.get("items", []) if after_snapshot else []:
+                did = int(item["dish_id"])
+                pre_qty = before_qty_map.get(did, 0)
+                try:
+                    if pre_qty > 0:
+                        cart_service.update_item(user_id, did, pre_qty)
+                    else:
+                        cart_service.remove_item(user_id, did)
+                    restored.append(did)
+                except Exception:
+                    logger.warning("undo add_to_cart: failed to restore dish_id=%d to qty=%d", did, pre_qty)
+                    failed_restore.append(did)
+
+            if failed_restore:
+                # Partial failure — don't mark as undone to keep journal consistent
+                return {
+                    "success": False,
+                    "message": f"部分菜品恢复失败(dish_id={failed_restore})，请手动检查购物车",
+                }
+            journal.mark_undone(action_id)
+            return {
+                "success": True,
+                "action_id": action_id,
+                "message": f"已撤回加入购物车（恢复 {len(restored)} 道菜品）",
+            }
+
         return {"success": False, "message": f"该操作暂不支持撤回: {action_type}"}
 
 
@@ -803,7 +876,7 @@ def action_node(state: dict, config: RunnableConfig | None = None) -> dict:
     plan = state["current_plan"]
 
     # Determine which action tool will be executed next
-    completed_step_ids = {r.get("step_id") or r.get("type", "") for r in state.get("tool_results", [])}
+    completed_step_ids = _successful_step_ids(state)
     next_action_call = next(
         (c for c in plan.tool_calls
          if c.tool_name in ACTION_TOOL_NAMES and c.step_id not in completed_step_ids),
@@ -846,13 +919,18 @@ def _normalize_tool_result(result: dict, state: dict, executed_tool_name: str = 
     for key in ("action_id", "undo_available"):
         if key in result:
             data[key] = result[key]
-    return {
+    normalized: dict = {
         "type": result.get("type") or tool_name or "unknown",
         "step_id": step_id,
         "success": bool(result.get("success", False)),
         "message": result.get("message", ""),
         "data": data,
     }
+    # Propagate retryable flag so _successful_step_ids can distinguish
+    # deterministic failures from transient ones.
+    if "retryable" in result:
+        normalized["retryable"] = bool(result["retryable"])
+    return normalized
 
 
 def _append_action_confirmations(message: str, tool_results: list[dict]) -> str:
@@ -867,6 +945,16 @@ def _append_action_confirmations(message: str, tool_results: list[dict]) -> str:
     ]
     if action_msgs:
         message += "\n\n" + "\n".join(f"- {m}" for m in action_msgs)
+    # Surface critical warnings from failed actions (e.g. rollback failures)
+    # so the user is always informed even in template/LLM response paths.
+    warning_msgs = [
+        r.get("message", "")
+        for r in tool_results
+        if not r.get("success") and r.get("type", "") in ACTION_TOOL_NAMES
+        and r.get("data", {}).get("rollback_failed")
+    ]
+    if warning_msgs:
+        message += "\n\n⚠️ " + "\n⚠️ ".join(warning_msgs)
     return message
 
 

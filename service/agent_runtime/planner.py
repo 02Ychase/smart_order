@@ -497,7 +497,15 @@ class LangGraphAgentPlanner:
             )
 
         if "购物车" in message and any(term in message for term in ("加", "添加", "放入", "加入")):
+            # Try last_recommendations first, then fall back to recent_evidence
             last_recs = context.get("last_recommendations", [])
+            if not last_recs:
+                # Extract dish_ids from recent_evidence (populated after RAG)
+                last_recs = [
+                    {"dish_id": e.get("facts", {}).get("dish_id")}
+                    for e in context.get("recent_evidence", [])
+                    if e.get("source_type") == "dish" and e.get("facts", {}).get("dish_id")
+                ]
             if last_recs:
                 items = [
                     {"dish_id": rec["dish_id"], "quantity": 1}
@@ -514,7 +522,7 @@ class LangGraphAgentPlanner:
                         )],
                         should_answer_directly=True,
                     )
-            # No recommendations available — need RAG first to resolve dish_id
+            # No recommendations or evidence available — need RAG first
             return AgentPlan(
                 intent="cart_action",
                 normalized_query=user_message,

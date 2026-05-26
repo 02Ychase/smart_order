@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from langchain_core.messages import HumanMessage
 
 from service.agent_runtime.graph import build_agent_graph
-from service.agent_runtime.nodes import LocalActionExecutor, _normalize_tool_result, evaluate_node, plan_node, rag_node, respond_node, route_after_plan
+from service.agent_runtime.nodes import LocalActionExecutor, _normalize_tool_result, _successful_step_ids, evaluate_node, plan_node, rag_node, respond_node, route_after_plan
 from service.agent_runtime.planner import ACTION_TOOL_NAMES, LangGraphAgentPlanner
 from service.agent_runtime.runtime import AgentRuntimeContext
 from service.agent_runtime.state import AgentPlan, GraphToolCall
@@ -1235,3 +1235,567 @@ def test_integration_multi_cuisine_path_b_replan():
     message = result["response_payload"]["message"]
     assert "宫保鸡丁" in message
     assert "剁椒鱼头" in message
+
+
+# ── Codex review round 2 — Issue 5: _successful_step_ids ──────────────
+
+
+def test_successful_step_ids_excludes_retryable_failures():
+    """Only retryable failures should remain pending for retry."""
+    state = {
+        "tool_results": [
+            {"step_id": "rag_0", "success": True, "type": "recommend_dishes"},
+            {"step_id": "rag_1", "success": False, "retryable": True, "type": "recommend_dishes"},
+            {"step_id": "add_to_cart_0", "success": True, "type": "add_to_cart"},
+            {"step_id": "act_bad", "success": False, "type": "add_to_cart"},  # no retryable → done
+        ]
+    }
+    ids = _successful_step_ids(state)
+    assert "rag_0" in ids
+    assert "add_to_cart_0" in ids
+    assert "act_bad" in ids, "Non-retryable failure should be treated as done"
+    assert "rag_1" not in ids, "Retryable failure should remain pending"
+
+
+def test_successful_step_ids_non_retryable_failure_is_done():
+    """Deterministic failure (retryable=False or missing) counts as completed."""
+    state = {
+        "tool_results": [
+            {"step_id": "act_0", "success": False, "retryable": False, "type": "add_to_cart"},
+        ]
+    }
+    ids = _successful_step_ids(state)
+    assert "act_0" in ids
+
+
+def test_successful_step_ids_defaults_true_when_missing():
+    """Legacy tool_results without 'success' key should default to completed."""
+    state = {
+        "tool_results": [
+            {"step_id": "rag_0", "type": "recommend_dishes"},
+        ]
+    }
+    ids = _successful_step_ids(state)
+    assert "rag_0" in ids
+
+
+def test_evaluate_node_retries_retryable_rag_step():
+    """evaluate_node should route back to plan when a retryable RAG step failed."""
+    plan = AgentPlan(
+        intent="recommendation",
+        tool_calls=[
+            GraphToolCall(tool_name="recommend_dishes", step_id="rag_0"),
+            GraphToolCall(tool_name="recommend_dishes", step_id="rag_1"),
+        ],
+        requires_rag=True,
+    )
+    state = {
+        "current_plan": plan,
+        "iteration_count": 1,
+        "max_iterations": 5,
+        "tool_results": [
+            {"step_id": "rag_0", "success": True, "type": "recommend_dishes"},
+            {"step_id": "rag_1", "success": False, "retryable": True, "type": "recommend_dishes"},
+        ],
+        "recent_evidence": [{"source_type": "dish", "source_id": 1}],
+        "messages": [HumanMessage(content="推荐一些菜")],
+    }
+    result = evaluate_node(state)
+    assert result["_next"] == "plan", "Retryable RAG failure should trigger re-plan"
+
+
+def test_evaluate_node_does_not_retry_deterministic_failure():
+    """Deterministic action failure (no retryable flag) should go to respond, not loop."""
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[
+            GraphToolCall(tool_name="add_to_cart", step_id="act_0", writes_database=True),
+        ],
+    )
+    state = {
+        "current_plan": plan,
+        "iteration_count": 1,
+        "max_iterations": 5,
+        "tool_results": [
+            {"step_id": "act_0", "success": False, "type": "add_to_cart"},  # no retryable → done
+        ],
+        "recent_evidence": [],
+        "messages": [HumanMessage(content="加入购物车")],
+    }
+    result = evaluate_node(state)
+    assert result["_next"] == "respond", "Non-retryable failure should go to respond"
+
+
+def test_route_after_plan_does_not_retry_non_retryable_action():
+    """Non-retryable action failure should route to respond, not action."""
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[
+            GraphToolCall(tool_name="add_to_cart", step_id="act_0", writes_database=True),
+        ],
+    )
+    state = {
+        "current_plan": plan,
+        "tool_results": [
+            {"step_id": "act_0", "success": False, "type": "add_to_cart"},
+        ],
+        "recent_evidence": [],
+    }
+    route = route_after_plan(state)
+    assert route == "respond", "Non-retryable failure should NOT be retried"
+
+
+# ── Codex review round 2 — Issue 2: undo add_to_cart ──────────────────
+
+
+def test_undo_last_add_to_cart_restores_quantities():
+    """undo_last should restore pre-add quantities from before_snapshot."""
+    executor = LocalActionExecutor(session=None)
+
+    mock_journal = MagicMock()
+    mock_journal.find_last_undoable.return_value = {
+        "action_type": "add_to_cart",
+        "action_id": "act_123",
+        "before_snapshot": {"items": [
+            {"dish_id": 11, "quantity": 2},   # existed before with qty=2
+            {"dish_id": 22, "quantity": 0},   # new item (qty=0 → remove)
+        ]},
+        "after_snapshot": {"items": [
+            {"dish_id": 11, "quantity": 1},
+            {"dish_id": 22, "quantity": 1},
+        ]},
+    }
+    mock_journal.mark_undone.return_value = None
+
+    mock_cart_service = MagicMock()
+
+    state = {"user_id": 1}
+
+    with patch("service.action_journal_service.ActionJournalService", return_value=mock_journal), \
+         patch("service.cart_service.CartService", return_value=mock_cart_service):
+        result = executor.undo_last(state)
+
+    assert result["success"] is True
+    assert "2 道菜品" in result["message"]
+    # dish_id=11 should be restored to qty=2 via update_item
+    mock_cart_service.update_item.assert_called_once_with(1, 11, 2)
+    # dish_id=22 was new, should be removed
+    mock_cart_service.remove_item.assert_called_once_with(1, 22)
+    mock_journal.mark_undone.assert_called_once_with("act_123")
+
+
+def test_undo_last_add_to_cart_partial_failure_does_not_mark_undone():
+    """If any item fails to restore, undo should fail and NOT mark undone."""
+    executor = LocalActionExecutor(session=None)
+
+    mock_journal = MagicMock()
+    mock_journal.find_last_undoable.return_value = {
+        "action_type": "add_to_cart",
+        "action_id": "act_456",
+        "before_snapshot": {"items": [
+            {"dish_id": 11, "quantity": 0},
+            {"dish_id": 22, "quantity": 0},
+        ]},
+        "after_snapshot": {"items": [
+            {"dish_id": 11, "quantity": 1},
+            {"dish_id": 22, "quantity": 1},
+        ]},
+    }
+    mock_journal.mark_undone.return_value = None
+
+    mock_cart_service = MagicMock()
+    # First remove succeeds, second fails
+    mock_cart_service.remove_item.side_effect = [None, ValueError("already removed")]
+
+    state = {"user_id": 1}
+
+    with patch("service.action_journal_service.ActionJournalService", return_value=mock_journal), \
+         patch("service.cart_service.CartService", return_value=mock_cart_service):
+        result = executor.undo_last(state)
+
+    assert result["success"] is False
+    assert "失败" in result["message"]
+    mock_journal.mark_undone.assert_not_called()
+
+
+# ── Codex review round 2+3 — cart_tool batch atomicity ────────────────
+
+
+def test_add_to_cart_tool_rollback_restores_existing_quantity():
+    """Rollback should restore pre-add quantity for existing items, not delete."""
+    from service.tools.cart_tool import add_to_cart_tool
+
+    mock_service = MagicMock()
+    # dish_id=11 existed with qty=2 → add 1 → post_qty=3
+    mock_service.add_item.side_effect = [
+        {"dish_id": 11, "quantity": 3},
+        ValueError("dish not found"),
+    ]
+    mock_service.update_item.return_value = {"success": True}
+
+    result = add_to_cart_tool(
+        user_id=1,
+        items=[
+            {"dish_id": 11, "quantity": 1},
+            {"dish_id": 999, "quantity": 1},
+        ],
+        _cart_service=mock_service,
+    )
+
+    assert result["success"] is False
+    assert "999" in result["message"]
+    # Pre-add qty was 3-1=2 → restore via update_item, not remove
+    mock_service.update_item.assert_called_once_with(1, 11, 2)
+    mock_service.remove_item.assert_not_called()
+    assert result["rolled_back"] == [11]
+
+
+def test_add_to_cart_tool_rollback_removes_new_item():
+    """Rollback should remove items that didn't exist before (pre_qty=0)."""
+    from service.tools.cart_tool import add_to_cart_tool
+
+    mock_service = MagicMock()
+    # dish_id=11 is new → add 1 → post_qty=1, pre_qty=0
+    mock_service.add_item.side_effect = [
+        {"dish_id": 11, "quantity": 1},
+        ValueError("dish not found"),
+    ]
+    mock_service.remove_item.return_value = {"success": True}
+
+    result = add_to_cart_tool(
+        user_id=1,
+        items=[
+            {"dish_id": 11, "quantity": 1},
+            {"dish_id": 999, "quantity": 1},
+        ],
+        _cart_service=mock_service,
+    )
+
+    assert result["success"] is False
+    # Pre-add qty was 1-1=0 → new item → remove
+    mock_service.remove_item.assert_called_once_with(1, 11)
+
+
+def test_add_to_cart_tool_all_succeed_returns_before_quantities():
+    """Successful batch should include before_quantities for journal."""
+    from service.tools.cart_tool import add_to_cart_tool
+
+    mock_service = MagicMock()
+    mock_service.add_item.side_effect = [
+        {"dish_id": 11, "quantity": 3},   # was 2, added 1
+        {"dish_id": 22, "quantity": 2},   # was 0, added 2
+    ]
+
+    result = add_to_cart_tool(
+        user_id=1,
+        items=[
+            {"dish_id": 11, "quantity": 1},
+            {"dish_id": 22, "quantity": 2},
+        ],
+        _cart_service=mock_service,
+    )
+
+    assert result["success"] is True
+    assert len(result["items"]) == 2
+    assert result["before_quantities"] == {11: 2, 22: 0}
+    mock_service.remove_item.assert_not_called()
+
+
+def test_add_to_cart_tool_duplicate_dish_id_rejected():
+    """Duplicate dish_ids in items should be rejected."""
+    from service.tools.cart_tool import add_to_cart_tool
+
+    mock_service = MagicMock()
+    result = add_to_cart_tool(
+        user_id=1,
+        items=[
+            {"dish_id": 11, "quantity": 1},
+            {"dish_id": 11, "quantity": 2},
+        ],
+        _cart_service=mock_service,
+    )
+
+    assert result["success"] is False
+    assert "重复" in result["message"]
+    mock_service.add_item.assert_not_called()
+
+
+def test_add_to_cart_tool_rollback_failure_reported():
+    """When rollback itself fails, rollback_failed should be in the result."""
+    from service.tools.cart_tool import add_to_cart_tool
+
+    mock_service = MagicMock()
+    # dish 11 new (post_qty=1, pre=0), dish 22 new (post_qty=1, pre=0), dish 999 fails
+    mock_service.add_item.side_effect = [
+        {"dish_id": 11, "quantity": 1},
+        {"dish_id": 22, "quantity": 1},
+        ValueError("dish not found"),
+    ]
+    # First rollback succeeds, second fails
+    mock_service.remove_item.side_effect = [{"success": True}, Exception("db error")]
+
+    result = add_to_cart_tool(
+        user_id=1,
+        items=[
+            {"dish_id": 11, "quantity": 1},
+            {"dish_id": 22, "quantity": 1},
+            {"dish_id": 999, "quantity": 1},
+        ],
+        _cart_service=mock_service,
+    )
+
+    assert result["success"] is False
+    assert result["rolled_back"] == [11]
+    assert result["rollback_failed"] == [22]
+
+
+def test_add_to_cart_tool_deprecated_single_mode():
+    """Single dish_id mode should still work but log deprecation warning."""
+    from service.tools.cart_tool import add_to_cart_tool
+
+    mock_service = MagicMock()
+    mock_service.add_item.return_value = {"dish_id": 11, "quantity": 1}
+
+    result = add_to_cart_tool(
+        user_id=1,
+        dish_id=11,
+        quantity=1,
+        _cart_service=mock_service,
+    )
+
+    assert result == {"dish_id": 11, "quantity": 1}
+    mock_service.add_item.assert_called_once()
+
+
+# ── Codex review round 2 — Issue 3: _rule_plan evidence fallback ──────
+
+
+def test_rule_plan_uses_recent_evidence_when_no_recommendations():
+    """_rule_plan should extract dish_ids from recent_evidence when
+    last_recommendations is empty."""
+    planner = LangGraphAgentPlanner()
+    context = {
+        "last_recommendations": [],
+        "recent_evidence": [
+            {"source_type": "dish", "facts": {"dish_id": 10, "dish_name": "宫保鸡丁"}},
+            {"source_type": "dish", "facts": {"dish_id": 20, "dish_name": "清蒸鲈鱼"}},
+            {"source_type": "merchant", "facts": {"merchant_id": 5}},
+        ],
+    }
+    plan = planner._rule_plan("帮我加入购物车", context)
+    assert plan.intent == "cart_action"
+    assert len(plan.tool_calls) == 1
+    call = plan.tool_calls[0]
+    assert call.tool_name == "add_to_cart"
+    items = call.arguments["items"]
+    dish_ids = {it["dish_id"] for it in items}
+    assert dish_ids == {10, 20}
+
+
+def test_rule_plan_prefers_last_recommendations_over_evidence():
+    """When both last_recommendations and recent_evidence exist,
+    last_recommendations should be preferred."""
+    planner = LangGraphAgentPlanner()
+    context = {
+        "last_recommendations": [{"dish_id": 99}],
+        "recent_evidence": [
+            {"source_type": "dish", "facts": {"dish_id": 10}},
+        ],
+    }
+    plan = planner._rule_plan("加入购物车", context)
+    assert plan.intent == "cart_action"
+    call = plan.tool_calls[0]
+    assert call.tool_name == "add_to_cart"
+    assert call.arguments["items"] == [{"dish_id": 99, "quantity": 1}]
+
+
+def test_rule_plan_falls_back_to_rag_when_no_evidence():
+    """When both last_recommendations and recent_evidence are empty,
+    _rule_plan should generate a RAG call."""
+    planner = LangGraphAgentPlanner()
+    context = {
+        "last_recommendations": [],
+        "recent_evidence": [],
+    }
+    plan = planner._rule_plan("帮我加入购物车", context)
+    assert plan.intent == "cart_action"
+    assert plan.requires_rag is True
+    assert plan.tool_calls[0].tool_name == "recommend_dishes"
+
+
+# ── Codex review round 5 — items structure validation & rollback msg ───
+
+
+def test_add_to_cart_tool_rejects_item_missing_dish_id():
+    """items=[{}] should return a clean failure, not throw KeyError."""
+    from service.tools.cart_tool import add_to_cart_tool
+
+    mock_service = MagicMock()
+    result = add_to_cart_tool(
+        user_id=1,
+        items=[{}],
+        _cart_service=mock_service,
+    )
+
+    assert result["success"] is False
+    assert "格式错误" in result["message"]
+    mock_service.add_item.assert_not_called()
+
+
+def test_add_to_cart_tool_rejects_non_dict_item():
+    """items=[1] should return a clean failure, not throw TypeError."""
+    from service.tools.cart_tool import add_to_cart_tool
+
+    mock_service = MagicMock()
+    result = add_to_cart_tool(
+        user_id=1,
+        items=[1],
+        _cart_service=mock_service,
+    )
+
+    assert result["success"] is False
+    assert "格式错误" in result["message"]
+    mock_service.add_item.assert_not_called()
+
+
+def test_add_to_cart_tool_rejects_non_integer_dish_id():
+    """items=[{"dish_id": "abc"}] should return a clean failure."""
+    from service.tools.cart_tool import add_to_cart_tool
+
+    mock_service = MagicMock()
+    result = add_to_cart_tool(
+        user_id=1,
+        items=[{"dish_id": "abc"}],
+        _cart_service=mock_service,
+    )
+
+    assert result["success"] is False
+    assert "无法解析为整数" in result["message"]
+    mock_service.add_item.assert_not_called()
+
+
+def test_execute_action_surfaces_rollback_failure_in_message():
+    """When add_to_cart fails with rollback_failed, the message should warn the user."""
+    from service.agent_runtime.nodes import LocalActionExecutor
+
+    executor = LocalActionExecutor.__new__(LocalActionExecutor)
+    executor.session = None
+
+    state = {
+        "user_id": 1,
+        "session_id": "s1",
+        "recent_evidence": [],
+        "tool_results": [],
+        "current_plan": AgentPlan(
+            intent="cart_action",
+            tool_calls=[
+                GraphToolCall("add_to_cart", {"items": [{"dish_id": 11, "quantity": 1}]}, True, step_id="add_0"),
+            ],
+        ),
+    }
+
+    # The local import `from service.tools.cart_tool import add_to_cart_tool`
+    # resolves via service.tools.cart_tool, so we patch the module-level attr.
+    import service.tools.cart_tool as _cart_mod
+
+    original = _cart_mod.add_to_cart_tool
+    _cart_mod.add_to_cart_tool = MagicMock(return_value={
+        "success": False,
+        "message": "添加菜品失败(dish_id=999): dish not found",
+        "rolled_back": [11],
+        "rollback_failed": [22],
+    })
+    try:
+        result = executor.execute_action(state["current_plan"], state)
+    finally:
+        _cart_mod.add_to_cart_tool = original
+
+    assert result["success"] is False
+    assert "部分回滚失败" in result["message"]
+    assert "22" in result["message"]
+
+
+# ── Codex review round 6 — quantity validation & rollback warning path ──
+
+
+def test_add_to_cart_tool_rejects_zero_quantity():
+    """quantity=0 should be rejected before reaching CartService."""
+    from service.tools.cart_tool import add_to_cart_tool
+
+    mock_service = MagicMock()
+    result = add_to_cart_tool(
+        user_id=1,
+        items=[{"dish_id": 11, "quantity": 0}],
+        _cart_service=mock_service,
+    )
+
+    assert result["success"] is False
+    assert "quantity 必须 >= 1" in result["message"]
+    mock_service.add_item.assert_not_called()
+
+
+def test_add_to_cart_tool_rejects_negative_quantity():
+    """Negative quantity should be rejected before reaching CartService."""
+    from service.tools.cart_tool import add_to_cart_tool
+
+    mock_service = MagicMock()
+    result = add_to_cart_tool(
+        user_id=1,
+        items=[{"dish_id": 11, "quantity": -3}],
+        _cart_service=mock_service,
+    )
+
+    assert result["success"] is False
+    assert "quantity 必须 >= 1" in result["message"]
+    mock_service.add_item.assert_not_called()
+
+
+def test_add_to_cart_tool_rejects_non_integer_quantity():
+    """Non-integer quantity should be rejected."""
+    from service.tools.cart_tool import add_to_cart_tool
+
+    mock_service = MagicMock()
+    result = add_to_cart_tool(
+        user_id=1,
+        items=[{"dish_id": 11, "quantity": "abc"}],
+        _cart_service=mock_service,
+    )
+
+    assert result["success"] is False
+    assert "quantity 无法解析为整数" in result["message"]
+    mock_service.add_item.assert_not_called()
+
+
+def test_append_action_confirmations_surfaces_rollback_warning():
+    """_append_action_confirmations should include failed action warnings
+    when rollback_failed is present, not just success messages."""
+    from service.agent_runtime.nodes import _append_action_confirmations
+
+    tool_results = [
+        {
+            "type": "add_to_cart",
+            "success": False,
+            "message": "添加失败(dish_id=999)（注意：部分回滚失败 dish_id=[22]，购物车可能已被部分修改，请检查）",
+            "data": {"rollback_failed": [22]},
+        },
+    ]
+    result = _append_action_confirmations("推荐了几道菜", tool_results)
+    assert "部分回滚失败" in result
+    assert "推荐了几道菜" in result
+
+
+def test_append_action_confirmations_no_warning_for_normal_failure():
+    """Normal failures without rollback_failed should NOT be appended."""
+    from service.agent_runtime.nodes import _append_action_confirmations
+
+    tool_results = [
+        {
+            "type": "add_to_cart",
+            "success": False,
+            "message": "添加失败(dish_id=999): dish not found",
+            "data": {},
+        },
+    ]
+    result = _append_action_confirmations("推荐了几道菜", tool_results)
+    # Normal failure doesn't get appended — only rollback_failed does
+    assert result == "推荐了几道菜"
