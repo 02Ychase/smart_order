@@ -658,8 +658,23 @@ class LocalActionExecutor:
                 {"dish_id": int(it["dish_id"]), "quantity": int(it.get("quantity", 1))}
                 for it in items
             ]
-            dish_count = len(items)
-            summary = f"已将 {dish_count} 道菜品加入购物车"
+            # Build detailed summary with dish names from evidence
+            evidence_by_id = {
+                e.get("facts", {}).get("dish_id"): e.get("facts", {})
+                for e in state.get("recent_evidence", [])
+                if e.get("source_type") == "dish"
+            }
+            item_names = []
+            for it in items:
+                did = int(it["dish_id"])
+                facts = evidence_by_id.get(did, {})
+                name = facts.get("dish_name", f"菜品{did}")
+                price = facts.get("price")
+                if price:
+                    item_names.append(f"{name}(¥{price})")
+                else:
+                    item_names.append(name)
+            summary = f"已将 {len(items)} 道菜品加入购物车：{'、'.join(item_names)}"
             journal = ActionJournalService(self.session).record_completed_action(
                 session_id=session_id,
                 user_id=user_id,

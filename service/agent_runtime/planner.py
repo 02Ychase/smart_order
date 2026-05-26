@@ -80,11 +80,11 @@ class LangGraphAgentPlanner:
                 return self._apply_user_message_hints(self._parse(raw), user_message)
             except Exception:
                 logger.warning("Planner LLM call failed, falling back to rule-based plan", exc_info=True)
-                return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
+                return self._apply_user_message_hints(self._rule_plan(user_message, context), user_message)
 
         # 3. No LLM configured
         logger.info("No LLM configured, using rule-based planner")
-        return self._apply_user_message_hints(self._rule_plan(user_message), user_message)
+        return self._apply_user_message_hints(self._rule_plan(user_message, context), user_message)
 
     @staticmethod
     def _build_human_input(user_message: str, context: dict[str, Any]) -> str:
@@ -475,8 +475,9 @@ class LangGraphAgentPlanner:
             return text[start : end + 1]
         return text
 
-    def _rule_plan(self, user_message: str) -> AgentPlan:
+    def _rule_plan(self, user_message: str, context: dict[str, Any] | None = None) -> AgentPlan:
         message = user_message.strip().lower()
+        context = context or {}
 
         if message in {"hi", "hello", "你好", "嗨", "在吗"}:
             return AgentPlan(intent="greeting", should_answer_directly=True)
@@ -496,9 +497,33 @@ class LangGraphAgentPlanner:
             )
 
         if "购物车" in message and any(term in message for term in ("加", "添加", "放入", "加入")):
+            last_recs = context.get("last_recommendations", [])
+            if last_recs:
+                items = [
+                    {"dish_id": rec["dish_id"], "quantity": 1}
+                    for rec in last_recs
+                    if rec.get("dish_id")
+                ]
+                if items:
+                    return AgentPlan(
+                        intent="cart_action",
+                        tool_calls=[GraphToolCall(
+                            tool_name="add_to_cart",
+                            arguments={"items": items},
+                            writes_database=True,
+                        )],
+                        should_answer_directly=True,
+                    )
+            # No recommendations available — need RAG first to resolve dish_id
             return AgentPlan(
                 intent="cart_action",
-                tool_calls=[GraphToolCall(tool_name="add_to_cart", writes_database=True)],
+                normalized_query=user_message,
+                requires_rag=True,
+                tool_calls=[GraphToolCall(
+                    tool_name="recommend_dishes",
+                    arguments={"query": user_message},
+                    writes_database=False,
+                )],
                 should_answer_directly=True,
             )
 

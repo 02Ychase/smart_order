@@ -410,11 +410,62 @@ def test_planner_structured_output_falls_back_to_direct_llm_on_failure(monkeypat
     assert plan.normalized_query == "你好"
 
 
-def test_plan_add_to_cart_intent():
+def test_plan_add_to_cart_without_context_generates_rag_first():
+    """When no last_recommendations exist, _rule_plan should generate
+    recommend_dishes (RAG-first) instead of an empty add_to_cart."""
     planner = LangGraphAgentPlanner()
     plan = planner._rule_plan("帮我把宫保鸡丁加到购物车")
     assert plan.intent == "cart_action"
-    assert any(call.tool_name == "add_to_cart" for call in plan.tool_calls)
+    assert plan.requires_rag is True
+    assert len(plan.tool_calls) == 1
+    assert plan.tool_calls[0].tool_name == "recommend_dishes"
+    assert plan.tool_calls[0].writes_database is False
+
+
+def test_plan_add_to_cart_with_recommendations_generates_items():
+    """When last_recommendations contain dish entries, _rule_plan should
+    generate add_to_cart with items populated from recommendations."""
+    planner = LangGraphAgentPlanner()
+    context = {
+        "last_recommendations": [
+            {"dish_id": 12, "dish_name": "宫保鸡丁", "price": 38},
+            {"dish_id": 35, "dish_name": "水煮鱼", "price": 52},
+        ],
+    }
+    plan = planner._rule_plan("加入购物车", context)
+    assert plan.intent == "cart_action"
+    assert len(plan.tool_calls) == 1
+    assert plan.tool_calls[0].tool_name == "add_to_cart"
+    assert plan.tool_calls[0].writes_database is True
+    items = plan.tool_calls[0].arguments["items"]
+    assert len(items) == 2
+    assert items[0] == {"dish_id": 12, "quantity": 1}
+    assert items[1] == {"dish_id": 35, "quantity": 1}
+
+
+def test_plan_add_to_cart_with_empty_recommendations_generates_rag_first():
+    """When last_recommendations is an empty list, _rule_plan should
+    fall back to RAG-first rather than generating an empty add_to_cart."""
+    planner = LangGraphAgentPlanner()
+    plan = planner._rule_plan("放入购物车", {"last_recommendations": []})
+    assert plan.intent == "cart_action"
+    assert plan.requires_rag is True
+    assert plan.tool_calls[0].tool_name == "recommend_dishes"
+
+
+def test_plan_add_to_cart_skips_recs_without_dish_id():
+    """Recommendations without dish_id (e.g. merchant results) should be
+    skipped; if none remain, fall back to RAG-first."""
+    planner = LangGraphAgentPlanner()
+    context = {
+        "last_recommendations": [
+            {"merchant_name": "老王湘菜馆"},
+        ],
+    }
+    plan = planner._rule_plan("加入购物车", context)
+    assert plan.intent == "cart_action"
+    assert plan.requires_rag is True
+    assert plan.tool_calls[0].tool_name == "recommend_dishes"
 
 
 def test_plan_save_address_intent():

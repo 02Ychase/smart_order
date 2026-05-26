@@ -287,3 +287,61 @@ def test_execute_add_to_cart_no_dish_id_no_items_fails():
     result = executor.execute_action(plan, state)
 
     assert result["success"] is False
+
+
+def test_execute_add_to_cart_summary_includes_dish_names():
+    """add_to_cart summary should include dish names and prices from evidence."""
+    executor = LocalActionExecutor(session=FakeSession())
+
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[GraphToolCall(
+            tool_name="add_to_cart",
+            arguments={"items": [
+                {"dish_id": 12, "quantity": 1},
+                {"dish_id": 35, "quantity": 1},
+            ]},
+            writes_database=True,
+            step_id="add_to_cart_0",
+        )],
+    )
+    state = {
+        "user_id": 1,
+        "session_id": "s1",
+        "tool_results": [],
+        "recent_evidence": [
+            {"source_type": "dish", "source_id": 12, "facts": {"dish_id": 12, "dish_name": "宫保鸡丁", "price": 28.0}},
+            {"source_type": "dish", "source_id": 35, "facts": {"dish_id": 35, "dish_name": "水煮鱼", "price": 45.0}},
+        ],
+    }
+
+    with patch("service.tools.cart_tool.add_to_cart_tool", return_value={"success": True, "items": []}) as mock_tool, \
+         patch("service.action_journal_service.ActionJournalService", return_value=_mock_journal()):
+        result = executor.execute_action(plan, state)
+
+    assert result["success"] is True
+    assert "宫保鸡丁" in result["message"]
+    assert "水煮鱼" in result["message"]
+    assert "¥28" in result["message"]
+
+
+def test_execute_add_to_cart_summary_fallback_without_evidence():
+    """Without evidence, summary should fall back to dish ID placeholders."""
+    executor = LocalActionExecutor(session=FakeSession())
+
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[GraphToolCall(
+            tool_name="add_to_cart",
+            arguments={"items": [{"dish_id": 99, "quantity": 1}]},
+            writes_database=True,
+        )],
+    )
+    state = {"user_id": 1, "session_id": "s1", "tool_results": [], "recent_evidence": []}
+
+    with patch("service.tools.cart_tool.add_to_cart_tool", return_value={"success": True, "items": []}), \
+         patch("service.action_journal_service.ActionJournalService", return_value=_mock_journal()):
+        result = executor.execute_action(plan, state)
+
+    assert result["success"] is True
+    assert "菜品99" in result["message"]

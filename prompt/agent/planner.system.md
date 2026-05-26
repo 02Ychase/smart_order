@@ -73,7 +73,7 @@
 - 推荐和知识查询默认直接回答，不因为缺少预算、人数、口味而追问。
 - 预算、人数、过敏原、菜系是可选过滤条件。
 - 用户说"把XXX加到购物车"时 intent=cart_action，tool_calls 使用 add_to_cart，arguments 使用 items 列表格式。
-- 如果用户指定的菜品不含 dish_id（只有菜名），先用 recommend_dishes 检索得到 dish_id，再执行 add_to_cart。此时 tool_calls 应包含两个工具调用，按执行顺序排列。
+- 如果用户指定的菜品不含 dish_id（只有菜名），初始计划只生成 recommend_dishes 检索 dish_id。RAG 完成后，续接规划会生成 add_to_cart(items=[...])。
 - 复合请求规则：当用户请求同时包含推荐需求和操作需求时（如"推荐XX然后加入购物车"）：
   - 初始计划先生成所有必要的 recommend_dishes/search_catalog。
   - intent 设为后续操作对应类型，如 cart_action。

@@ -50,7 +50,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "add_to_cart",
-            "description": "将菜品加入用户购物车。支持单个(dish_id)或批量(items)模式",
+            "description": "[DEPRECATED: 新代码请使用 items 批量模式] 将菜品加入用户购物车。支持单个(dish_id)或批量(items)模式",
             "parameters": {
                 "type": "object",
                 "properties": {
