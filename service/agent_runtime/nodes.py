@@ -526,10 +526,12 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
             call_results.append(_execute_single_call(pending_rag_calls[0]))
         except Exception as exc:
             call_obj = pending_rag_calls[0]
-            logger.warning("RAG call failed for step=%s: %s", call_obj.step_id, exc, exc_info=True)
+            _step = getattr(call_obj, "step_id", "rag_0")
+            _tool = getattr(call_obj, "tool_name", "recommend_dishes") or "recommend_dishes"
+            logger.warning("RAG call failed for step=%s: %s", _step, exc, exc_info=True)
             failed_results.append({
-                "type": call_obj.tool_name or "recommend_dishes",
-                "step_id": call_obj.step_id,
+                "type": _tool,
+                "step_id": _step,
                 "success": False,
                 "message": f"检索失败: {exc}",
                 "data": {},
@@ -543,10 +545,12 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
                 try:
                     call_results.append(future.result())
                 except Exception as exc:
-                    logger.warning("RAG call failed for step=%s: %s", call_obj.step_id, exc, exc_info=True)
+                    _step = getattr(call_obj, "step_id", "rag_unknown")
+                    _tool = getattr(call_obj, "tool_name", "recommend_dishes") or "recommend_dishes"
+                    logger.warning("RAG call failed for step=%s: %s", _step, exc, exc_info=True)
                     failed_results.append({
-                        "type": call_obj.tool_name or "recommend_dishes",
-                        "step_id": call_obj.step_id,
+                        "type": _tool,
+                        "step_id": _step,
                         "success": False,
                         "message": f"检索失败: {exc}",
                         "data": {},
