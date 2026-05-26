@@ -23,12 +23,24 @@ def add_to_cart_tool(
 
     if items:
         results = []
+        failed = []
         for item in items:
-            payload = SimpleNamespace(
-                dish_id=int(item["dish_id"]),
-                quantity=int(item.get("quantity", 1)),
-            )
-            results.append(service.add_item(user_id, payload))
+            try:
+                payload = SimpleNamespace(
+                    dish_id=int(item["dish_id"]),
+                    quantity=int(item.get("quantity", 1)),
+                )
+                result = service.add_item(user_id, payload)
+                results.append(result)
+            except Exception as exc:
+                failed.append({"dish_id": item.get("dish_id"), "error": str(exc)})
+        if failed:
+            return {
+                "success": False,
+                "message": f"部分菜品添加失败: {len(failed)}/{len(items)}",
+                "items": results,
+                "failed": failed,
+            }
         return {"success": True, "items": results}
 
     if dish_id is None:

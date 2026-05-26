@@ -764,6 +764,59 @@ def test_respond_node_passes_response_hint_to_llm():
     assert captured_kwargs["response_hint"] == "推荐辣椒炒肉作为荤菜，总价约50元"
 
 
+def test_rag_node_batch_isolates_failures():
+    """If one RAG call fails, others should still succeed."""
+    plan = AgentPlan(
+        intent="recommendation",
+        normalized_query="川菜和甜品",
+        requires_rag=True,
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "川菜"}, False, step_id="recommend_dishes_0"),
+            GraphToolCall("recommend_dishes", {"query": "甜品"}, False, step_id="recommend_dishes_1"),
+        ],
+    )
+
+    sichuan_item = StubEvidenceItem(
+        "dish", 12, 1, "宫保鸡丁",
+        {"dish_id": 12, "dish_name": "宫保鸡丁", "cuisine_type": "川菜"},
+        ["川菜"], "川菜", 0.9,
+    )
+
+    call_count = {"n": 0}
+    def flaky_retrieve(query, agent_plan=None, memories=None, limit=5, **kwargs):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise RuntimeError("Pinecone timeout")
+        return [sichuan_item]
+
+    mock_runtime = MagicMock()
+    mock_runtime.retriever = MagicMock()
+    mock_runtime.retriever.retrieve = flaky_retrieve
+
+    state = {
+        "current_plan": plan,
+        "tool_results": [],
+        "recent_evidence": [],
+        "loaded_user_memories": [],
+        "messages": [HumanMessage(content="推荐川菜和甜品")],
+    }
+
+    with patch("service.agent_runtime.nodes.get_runtime", return_value=mock_runtime), \
+         patch("service.config.get_config") as mock_cfg:
+        mock_cfg.return_value.rag.output_limit_default = 5
+        mock_cfg.return_value.rag.output_limit_max = 10
+        result = rag_node(state)
+
+    # One call succeeded, one failed
+    successful = [r for r in result["tool_results"] if r["success"]]
+    failed = [r for r in result["tool_results"] if not r["success"]]
+    assert len(successful) == 1
+    assert len(failed) == 1
+    assert "检索失败" in failed[0]["message"]
+    # Evidence from the successful call should be present
+    assert len(result["recent_evidence"]) > 0
+
+
 def test_compound_request_batch_rag_and_batch_cart():
     """Full flow: compound request should batch RAG → replan → batch add_to_cart."""
     # Phase 1: Initial plan with 2 RAG calls

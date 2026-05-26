@@ -30,7 +30,7 @@ def test_execute_add_to_cart():
     )
     state = {"user_id": 1, "session_id": "s1", "recent_action_ids": []}
 
-    with patch("service.tools.cart_tool.add_to_cart_tool", return_value={"dish_id": 11, "quantity": 2}), \
+    with patch("service.tools.cart_tool.add_to_cart_tool", return_value={"success": True, "items": [{"dish_id": 11, "quantity": 2}]}), \
          patch("service.action_journal_service.ActionJournalService", return_value=_mock_journal()):
         result = executor.execute_action(plan, state)
 
@@ -228,6 +228,37 @@ def test_execute_add_to_cart_empty_items_fails():
 
     assert result["success"] is False
     assert "items" in result["message"]
+
+
+def test_execute_add_to_cart_partial_failure():
+    """If cart_tool returns success=False, execute_action should not record journal."""
+    executor = LocalActionExecutor(session=FakeSession())
+
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[GraphToolCall(
+            tool_name="add_to_cart",
+            arguments={"items": [
+                {"dish_id": 11, "quantity": 1},
+                {"dish_id": 999, "quantity": 1},
+            ]},
+            writes_database=True,
+        )],
+    )
+    state = {"user_id": 1, "session_id": "s1", "recent_action_ids": [], "tool_results": []}
+
+    partial_result = {
+        "success": False,
+        "message": "部分菜品添加失败: 1/2",
+        "items": [{"dish_id": 11, "quantity": 1}],
+        "failed": [{"dish_id": 999, "error": "Dish not found"}],
+    }
+
+    with patch("service.tools.cart_tool.add_to_cart_tool", return_value=partial_result):
+        result = executor.execute_action(plan, state)
+
+    assert result["success"] is False
+    assert "失败" in result["message"]
 
 
 def test_execute_add_to_cart_no_dish_id_no_items_fails():

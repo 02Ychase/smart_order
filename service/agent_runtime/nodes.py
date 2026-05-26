@@ -446,7 +446,7 @@ def _build_call_scoped_plan(plan, call_args):
 
 
 def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     from service.config import get_config
 
@@ -517,13 +517,40 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
         ]
         return step_id, tool_name, serialized
 
-    # Execute: skip ThreadPoolExecutor for single call
+    # Execute with exception isolation per call
+    call_results = []
+    failed_results = []
+
     if len(pending_rag_calls) == 1:
-        call_results = [_execute_single_call(pending_rag_calls[0])]
+        try:
+            call_results.append(_execute_single_call(pending_rag_calls[0]))
+        except Exception as exc:
+            call_obj = pending_rag_calls[0]
+            logger.warning("RAG call failed for step=%s: %s", call_obj.step_id, exc, exc_info=True)
+            failed_results.append({
+                "type": call_obj.tool_name or "recommend_dishes",
+                "step_id": call_obj.step_id,
+                "success": False,
+                "message": f"检索失败: {exc}",
+                "data": {},
+            })
     else:
         max_workers = min(4, len(pending_rag_calls))
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            call_results = list(pool.map(_execute_single_call, pending_rag_calls))
+            futures = {pool.submit(_execute_single_call, c): c for c in pending_rag_calls}
+            for future in as_completed(futures):
+                call_obj = futures[future]
+                try:
+                    call_results.append(future.result())
+                except Exception as exc:
+                    logger.warning("RAG call failed for step=%s: %s", call_obj.step_id, exc, exc_info=True)
+                    failed_results.append({
+                        "type": call_obj.tool_name or "recommend_dishes",
+                        "step_id": call_obj.step_id,
+                        "success": False,
+                        "message": f"检索失败: {exc}",
+                        "data": {},
+                    })
 
     # Merge evidence with deduplication by (source_type, source_id)
     existing_evidence = list(state.get("recent_evidence", []))
@@ -535,7 +562,7 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
                 existing_evidence.append(item)
                 seen_keys.add(key)
 
-    # Mark all executed steps complete
+    # Mark all executed steps in tool_results (successes + failures)
     existing_results = list(state.get("tool_results", []))
     for step_id, tool_name, serialized in call_results:
         existing_results.append({
@@ -545,6 +572,7 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
             "message": f"检索到 {len(serialized)} 条结果",
             "data": {},
         })
+    existing_results.extend(failed_results)
 
     return {"recent_evidence": existing_evidence, "tool_results": existing_results}
 
@@ -619,6 +647,13 @@ class LocalActionExecutor:
             add_result = add_to_cart_tool(
                 user_id=user_id, items=items, session=self.session,
             )
+            if not add_result.get("success", False):
+                return {
+                    "success": False,
+                    "message": add_result.get("message", "加入购物车失败"),
+                    "undo_available": False,
+                    "data": add_result,
+                }
             after_snapshot = [
                 {"dish_id": int(it["dish_id"]), "quantity": int(it.get("quantity", 1))}
                 for it in items
