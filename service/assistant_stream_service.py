@@ -59,12 +59,39 @@ class AssistantStreamService:
         conversation_history = _format_recent_turns(messages, max_turns=2)
 
         if result.get("recent_evidence"):
+            # Extract tool_results and response_hint so the streaming LLM
+            # knows about executed actions and planner guidance.
+            tool_results = result.get("tool_results") or []
+            current_plan = result.get("current_plan")
+            response_hint = ""
+            if current_plan and hasattr(current_plan, "response_hint"):
+                response_hint = current_plan.response_hint or ""
+
+            # Filter evidence: compound → acted-upon items only; pure rec → all for LLM
+            from service.agent_runtime.nodes import (
+                _extract_acted_dish_ids,
+                _filter_evidence_for_presentation,
+            )
+            raw_evidence = result.get("recent_evidence") or []
+            acted_ids = _extract_acted_dish_ids(tool_results, current_plan)
+            llm_evidence = (
+                _filter_evidence_for_presentation(raw_evidence, tool_results, current_plan)
+                if acted_ids is not None
+                else raw_evidence
+            )
+            target_count = (
+                (current_plan.filters or {}).get("limit") if current_plan else None
+            )
+
             streamed_message = ""
             async for token in self._stream_grounded_response(
                 user_message=message,
                 response_type=payload.get("response_type", "recommendation"),
-                evidence=result.get("recent_evidence") or [],
+                evidence=llm_evidence,
                 conversation_history=conversation_history,
+                tool_results=tool_results,
+                response_hint=response_hint,
+                target_count=target_count,
             ):
                 streamed_message += token
                 yield {"type": "token", "content": token}
@@ -96,12 +123,20 @@ class AssistantStreamService:
         response_type: str,
         evidence: list[dict],
         conversation_history: str = "",
+        tool_results: list[dict] | None = None,
+        response_hint: str = "",
+        target_count: int | None = None,
     ) -> AsyncIterator[str]:
         try:
             from langchain.chat_models import init_chat_model
             from langchain_core.prompts import ChatPromptTemplate
 
-            from service.agent_runtime.nodes import _build_structured_data, _format_evidence_for_llm, _template_recommendation
+            from service.agent_runtime.nodes import (
+                ACTION_TOOL_NAMES,
+                _build_structured_data,
+                _format_evidence_for_llm,
+                _template_recommendation,
+            )
             from service.agent_runtime.prompts import PromptRegistry
             from service.config import get_config
             import os
@@ -118,7 +153,25 @@ class AssistantStreamService:
             parts.append(f"用户最新消息：{user_message}")
             parts.append(f"意图：{response_type}")
             parts.append(f"\n检索到的证据：\n{evidence_text}")
-            parts.append("\n请基于证据生成自然回复。")
+
+            # Inject completed action results so the LLM knows about
+            # cart operations, address saves, etc.
+            if tool_results:
+                action_lines = []
+                for r in tool_results:
+                    if r.get("type", "") in ACTION_TOOL_NAMES:
+                        status = "成功" if r.get("success") else "失败"
+                        action_lines.append(f"- {r.get('message', '')}（{status}）")
+                if action_lines:
+                    parts.append(f"\n已完成的操作：\n" + "\n".join(action_lines))
+
+            if response_hint:
+                parts.append(f"\n规划提示：{response_hint}")
+
+            if target_count and isinstance(target_count, int) and target_count > 0:
+                parts.append(f"\n请从以上证据中精选 {target_count} 项最符合用户需求的结果进行推荐，不要罗列全部。")
+
+            parts.append("\n请基于证据和已完成操作生成自然回复。")
             prompt = "\n".join(parts)
 
             if get_config().guardrails.enable_output_guardrail:

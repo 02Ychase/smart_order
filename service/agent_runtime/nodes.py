@@ -933,6 +933,74 @@ def _normalize_tool_result(result: dict, state: dict, executed_tool_name: str = 
     return normalized
 
 
+def _extract_acted_dish_ids(tool_results: list[dict], plan) -> set[int] | None:
+    """Extract dish_ids acted upon by add_to_cart actions.
+
+    Returns a set of dish_ids if add_to_cart actions exist, or None if no
+    add_to_cart actions were found (signals no dish-id-based filtering).
+    """
+    dish_ids: set[int] = set()
+    has_add_to_cart = False
+
+    for r in tool_results:
+        if r.get("type") != "add_to_cart":
+            continue
+        has_add_to_cart = True
+        bq = r.get("data", {}).get("before_quantities")
+        if bq:
+            dish_ids.update(int(k) for k in bq.keys())
+
+    if has_add_to_cart and not dish_ids and plan:
+        for call in (plan.tool_calls or []):
+            if call.tool_name != "add_to_cart":
+                continue
+            items = call.arguments.get("items") or []
+            for it in items:
+                did = it.get("dish_id")
+                if did is not None:
+                    dish_ids.add(int(did))
+            legacy_id = call.arguments.get("dish_id")
+            if legacy_id is not None:
+                dish_ids.add(int(legacy_id))
+
+    return dish_ids if has_add_to_cart else None
+
+
+def _filter_evidence_for_presentation(
+    evidence: list[dict],
+    tool_results: list[dict],
+    plan,
+) -> list[dict]:
+    """Filter evidence to only what the user should see.
+
+    Compound (RAG + add_to_cart): keep only items whose dish_id was acted upon.
+    Pure recommendation: keep the top N dish items where N = plan.filters.limit.
+    """
+    acted_ids = _extract_acted_dish_ids(tool_results, plan)
+    if acted_ids is not None:
+        return [
+            e for e in evidence
+            if e.get("source_type") != "dish"
+            or e.get("facts", {}).get("dish_id") in acted_ids
+        ]
+
+    if plan and (plan.filters or {}).get("limit"):
+        limit = plan.filters["limit"]
+        if isinstance(limit, int) and limit > 0:
+            filtered = []
+            dish_count = 0
+            for e in evidence:
+                if e.get("source_type") == "dish":
+                    if dish_count < limit:
+                        filtered.append(e)
+                        dish_count += 1
+                else:
+                    filtered.append(e)
+            return filtered
+
+    return evidence
+
+
 def _append_action_confirmations(message: str, tool_results: list[dict]) -> str:
     """Append action confirmation lines to a message. Used by both template
     and LLM-fallback paths to ensure action results are never silently dropped."""
@@ -998,15 +1066,22 @@ def respond_node(state: dict, config: RunnableConfig | None = None) -> dict:
     response_type = _external_response_type(plan, state)
     user_message = latest_user_message(state)
     conversation_history = _format_recent_turns(state.get("messages", []), max_turns=2)
-
-    recommendations, citations = _build_structured_data(evidence)
     tool_results = state.get("tool_results", [])
+
+    presentation_evidence = _filter_evidence_for_presentation(evidence, tool_results, plan)
+    acted_ids = _extract_acted_dish_ids(tool_results, plan)
+    llm_evidence = presentation_evidence if acted_ids is not None else evidence
+
+    recommendations, citations = _build_structured_data(presentation_evidence)
+
+    target_count = (plan.filters or {}).get("limit") if plan else None
 
     if evidence and use_llm:
         message = _generate_llm_response(
-            user_message, response_type, evidence, conversation_history,
+            user_message, response_type, llm_evidence, conversation_history,
             tool_results=tool_results,
             response_hint=plan.response_hint if plan else "",
+            target_count=target_count,
         )
     elif evidence:
         message = _template_recommendation(recommendations)
@@ -1028,7 +1103,7 @@ def respond_node(state: dict, config: RunnableConfig | None = None) -> dict:
         from service.config import get_config
         if get_config().guardrails.enable_output_guardrail:
             from service.guardrails import OutputGuardrail
-            output_result = OutputGuardrail().check(message, evidence)
+            output_result = OutputGuardrail().check(message, presentation_evidence)
             if not output_result.allowed:
                 logger.warning("Output guardrail triggered: %s, falling back to template", output_result.reason)
                 message = _template_recommendation(recommendations)
@@ -1114,6 +1189,7 @@ def _generate_llm_response(
     conversation_history: str = "",
     tool_results: list[dict] | None = None,
     response_hint: str = "",
+    target_count: int | None = None,
 ) -> str:
     try:
         from service.agent_runtime.prompts import PromptRegistry
@@ -1140,6 +1216,9 @@ def _generate_llm_response(
 
         if response_hint:
             parts.append(f"\n规划提示：{response_hint}")
+
+        if target_count and isinstance(target_count, int) and target_count > 0:
+            parts.append(f"\n请从以上证据中精选 {target_count} 项最符合用户需求的结果进行推荐，不要罗列全部。")
 
         parts.append("\n请基于证据和已完成操作生成自然回复。")
         prompt = "\n".join(parts)

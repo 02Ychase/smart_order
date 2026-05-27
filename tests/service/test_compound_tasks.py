@@ -747,7 +747,7 @@ def test_respond_node_passes_response_hint_to_llm():
 
     captured_kwargs = {}
 
-    def fake_generate(user_message, response_type, evidence, conversation_history="", tool_results=None, response_hint=""):
+    def fake_generate(user_message, response_type, evidence, conversation_history="", tool_results=None, response_hint="", target_count=None):
         captured_kwargs["response_hint"] = response_hint
         return "测试回复"
 
@@ -1518,6 +1518,188 @@ def test_add_to_cart_tool_duplicate_dish_id_rejected():
     assert result["success"] is False
     assert "重复" in result["message"]
     mock_service.add_item.assert_not_called()
+
+
+# ── Evidence filtering for presentation ──────────────────────────────
+
+
+from service.agent_runtime.nodes import _extract_acted_dish_ids, _filter_evidence_for_presentation
+
+
+def _make_dish_evidence(dish_id, name="菜品", score=0.9):
+    return {
+        "source_type": "dish",
+        "source_id": dish_id,
+        "merchant_id": 1,
+        "title": name,
+        "facts": {"dish_id": dish_id, "dish_name": name, "price": 20.0, "merchant_name": "商家A"},
+        "why_matched": ["匹配"],
+        "citation": "",
+        "score": score,
+    }
+
+
+def _make_merchant_evidence(merchant_id=1):
+    return {
+        "source_type": "merchant",
+        "source_id": merchant_id,
+        "merchant_id": merchant_id,
+        "title": "商家",
+        "facts": {"merchant_id": merchant_id, "merchant_name": "商家A"},
+        "why_matched": [],
+        "citation": "",
+        "score": 0.5,
+    }
+
+
+def test_extract_acted_dish_ids_from_before_quantities():
+    tool_results = [
+        {"type": "add_to_cart", "success": True, "data": {"before_quantities": {10: 0, 20: 1}}, "message": "ok"},
+    ]
+    ids = _extract_acted_dish_ids(tool_results, None)
+    assert ids == {10, 20}
+
+
+def test_extract_acted_dish_ids_fallback_to_plan_items():
+    tool_results = [
+        {"type": "add_to_cart", "success": True, "data": {}, "message": "ok"},
+    ]
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[GraphToolCall("add_to_cart", {"items": [{"dish_id": 5}, {"dish_id": 7}]}, True)],
+    )
+    ids = _extract_acted_dish_ids(tool_results, plan)
+    assert ids == {5, 7}
+
+
+def test_extract_acted_dish_ids_legacy_dish_id_format():
+    tool_results = [
+        {"type": "add_to_cart", "success": True, "data": {}, "message": "ok"},
+    ]
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[GraphToolCall("add_to_cart", {"dish_id": 12}, True)],
+    )
+    ids = _extract_acted_dish_ids(tool_results, plan)
+    assert ids == {12}
+
+
+def test_extract_acted_dish_ids_returns_none_without_cart_action():
+    tool_results = [
+        {"type": "recommend_dishes", "success": True, "data": {}, "message": "ok"},
+    ]
+    assert _extract_acted_dish_ids(tool_results, None) is None
+    assert _extract_acted_dish_ids([], None) is None
+
+
+def test_filter_evidence_compound_request():
+    evidence = [_make_dish_evidence(i) for i in range(1, 10)]
+    tool_results = [
+        {"type": "add_to_cart", "success": True, "data": {"before_quantities": {1: 0, 3: 0, 5: 0, 7: 0}}, "message": "ok"},
+    ]
+    filtered = _filter_evidence_for_presentation(evidence, tool_results, None)
+    assert len(filtered) == 4
+    assert {e["facts"]["dish_id"] for e in filtered} == {1, 3, 5, 7}
+
+
+def test_filter_evidence_pure_recommendation_with_limit():
+    evidence = [_make_dish_evidence(i, score=1.0 - i * 0.1) for i in range(1, 6)]
+    plan = AgentPlan(intent="recommendation", filters={"limit": 2})
+    filtered = _filter_evidence_for_presentation(evidence, [], plan)
+    assert len(filtered) == 2
+    assert filtered[0]["facts"]["dish_id"] == 1
+    assert filtered[1]["facts"]["dish_id"] == 2
+
+
+def test_filter_evidence_no_limit_returns_all():
+    evidence = [_make_dish_evidence(i) for i in range(1, 6)]
+    plan = AgentPlan(intent="recommendation")
+    filtered = _filter_evidence_for_presentation(evidence, [], plan)
+    assert len(filtered) == 5
+
+
+def test_filter_evidence_preserves_non_dish_items():
+    evidence = [_make_dish_evidence(1), _make_merchant_evidence(10), _make_dish_evidence(2)]
+    tool_results = [
+        {"type": "add_to_cart", "success": True, "data": {"before_quantities": {1: 0}}, "message": "ok"},
+    ]
+    filtered = _filter_evidence_for_presentation(evidence, tool_results, None)
+    assert len(filtered) == 2
+    types = [e["source_type"] for e in filtered]
+    assert "dish" in types
+    assert "merchant" in types
+
+
+def test_respond_node_compound_shows_only_acted_items():
+    """respond_node should only include acted-upon items in recommendations."""
+    plan = AgentPlan(
+        intent="cart_action",
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "午餐"}, False, step_id="recommend_dishes_0"),
+            GraphToolCall("add_to_cart", {"items": [{"dish_id": 1, "quantity": 1}, {"dish_id": 3, "quantity": 1}]}, True, step_id="add_to_cart_0"),
+        ],
+    )
+    state = {
+        "messages": [HumanMessage(content="推荐两个菜加入购物车")],
+        "current_plan": plan,
+        "recent_evidence": [_make_dish_evidence(i, f"菜品{i}") for i in range(1, 6)],
+        "tool_results": [
+            {"type": "recommend_dishes", "step_id": "recommend_dishes_0", "success": True, "message": "ok", "data": {}},
+            {"type": "add_to_cart", "step_id": "add_to_cart_0", "success": True,
+             "message": "已将 2 道菜品加入购物车", "data": {"before_quantities": {1: 0, 3: 0}}},
+        ],
+        "session_id": "s1",
+        "user_id": 1,
+        "loaded_user_memories": [],
+        "recent_action_ids": ["act_1"],
+        "iteration_count": 2,
+        "max_iterations": 5,
+        "metrics": {},
+        "guardrail_blocked": False,
+    }
+    runtime = MagicMock()
+    runtime.use_llm_response = False
+
+    with patch("service.agent_runtime.nodes.get_runtime", return_value=runtime):
+        result = respond_node(state)
+
+    recs = result["response_payload"]["recommendations"]
+    assert len(recs) == 2
+    assert {r["dish_id"] for r in recs} == {1, 3}
+
+
+def test_respond_node_pure_rec_payload_respects_limit():
+    """Pure recommendation: payload has top N items; LLM would receive all."""
+    plan = AgentPlan(
+        intent="recommendation",
+        requires_rag=True,
+        filters={"limit": 1},
+    )
+    state = {
+        "messages": [HumanMessage(content="推荐一道川菜")],
+        "current_plan": plan,
+        "recent_evidence": [_make_dish_evidence(i, f"菜品{i}", score=1.0 - i * 0.1) for i in range(1, 5)],
+        "tool_results": [
+            {"type": "recommend_dishes", "step_id": "recommend_dishes_0", "success": True, "message": "ok", "data": {}},
+        ],
+        "session_id": "s1",
+        "user_id": 1,
+        "loaded_user_memories": [],
+        "recent_action_ids": [],
+        "iteration_count": 1,
+        "max_iterations": 5,
+        "metrics": {},
+        "guardrail_blocked": False,
+    }
+    runtime = MagicMock()
+    runtime.use_llm_response = False
+
+    with patch("service.agent_runtime.nodes.get_runtime", return_value=runtime):
+        result = respond_node(state)
+
+    recs = result["response_payload"]["recommendations"]
+    assert len(recs) == 1
+    assert recs[0]["dish_id"] == 1
 
 
 def test_add_to_cart_tool_rollback_failure_reported():
