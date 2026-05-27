@@ -207,7 +207,6 @@ def test_query_planner_consumes_merchant_preference_type() -> None:
     """Verify _apply_memory_hints recognizes 'merchant_preference' (not 'merchant_affinity')."""
     from service.rag.query_planner import _apply_memory_hints
 
-    cuisine_types: list[str] = []
     flavor_prefs: list[str] = []
     allergens: list[str] = []
     preferred_dishes: list[str] = []
@@ -216,7 +215,7 @@ def test_query_planner_consumes_merchant_preference_type() -> None:
     memories = [
         {"memory_type": "merchant_preference", "content": "用户经常去兰姨小炒"},
     ]
-    _apply_memory_hints(memories, cuisine_types, flavor_prefs, allergens,
+    _apply_memory_hints(memories, flavor_prefs, allergens,
                         preferred_dishes, preferred_merchants)
 
     assert "兰姨小炒" in preferred_merchants
@@ -226,7 +225,6 @@ def test_query_planner_accepts_legacy_merchant_affinity_type() -> None:
     """Old 'merchant_affinity' rows remain compatible with code consumers."""
     from service.rag.query_planner import _apply_memory_hints
 
-    cuisine_types: list[str] = []
     flavor_prefs: list[str] = []
     allergens: list[str] = []
     preferred_dishes: list[str] = []
@@ -235,7 +233,7 @@ def test_query_planner_accepts_legacy_merchant_affinity_type() -> None:
     memories = [
         {"memory_type": "merchant_affinity", "content": "用户经常去兰姨小炒"},
     ]
-    _apply_memory_hints(memories, cuisine_types, flavor_prefs, allergens,
+    _apply_memory_hints(memories, flavor_prefs, allergens,
                         preferred_dishes, preferred_merchants)
 
     assert "兰姨小炒" in preferred_merchants

@@ -115,8 +115,9 @@ def test_retriever_applies_price_desc_and_limit_after_recall() -> None:
 
     evidence = retriever.retrieve("推荐一个最贵的湘菜", agent_plan, memories=[], limit=3)
 
-    assert len(evidence) == 1
+    assert len(evidence) == 3
     assert evidence[0].facts["dish_name"] == "剁椒鱼块"
+    assert [item.facts["price"] for item in evidence] == [38.0, 29.0, 24.0]
 
 
 def test_cross_encoder_and_reranker_receive_normalized_query() -> None:

@@ -157,7 +157,7 @@ def test_cosine_similarity_positive_correlation() -> None:
 
 
 def test_text_overlaps_legacy_matches_shared_keyword() -> None:
-    assert _text_overlaps_legacy("我喜欢吃川菜", "川味麻辣 鱼香肉丝") is True
+    assert _text_overlaps_legacy("我喜欢吃辣", "川味麻辣 鱼香肉丝") is True
 
 
 def test_text_overlaps_legacy_no_shared_keyword() -> None:
