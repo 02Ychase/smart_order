@@ -28,17 +28,41 @@ class CrossEncoderReranker:
         if not candidates:
             return []
 
-        for candidate in candidates:
-            text = self._candidate_to_text(candidate)
-            try:
-                score = self._scorer.score(query, text)
-            except Exception:
-                logger.warning("Cross-encoder scoring failed for %s", candidate.stable_key, exc_info=True)
-                score = 0.0
+        texts = [self._candidate_to_text(candidate) for candidate in candidates]
+        scores = self._score_texts(query, texts)
+        for candidate, score in zip(candidates, scores):
             candidate.cross_encoder_score = score
 
         scored = sorted(candidates, key=lambda c: c.cross_encoder_score, reverse=True)
         return scored[:top_k]
+
+    def _score_texts(self, query: str, texts: list[str]) -> list[float]:
+        """Score all texts against the query in a single batched call when the
+        scorer supports it, falling back to per-item scoring otherwise.
+
+        Batching is the key cost win for the real model (one forward pass for
+        the whole pool instead of one per candidate). Scorers that only
+        implement ``score`` (e.g. test doubles, simple custom scorers) still
+        work via the per-item path, which also isolates per-candidate errors.
+        """
+        score_batch = getattr(self._scorer, "score_batch", None)
+        if callable(score_batch):
+            try:
+                return list(score_batch(query, texts))
+            except Exception:
+                logger.warning(
+                    "Cross-encoder batch scoring failed; falling back to per-item",
+                    exc_info=True,
+                )
+
+        scores: list[float] = []
+        for text in texts:
+            try:
+                scores.append(self._scorer.score(query, text))
+            except Exception:
+                logger.warning("Cross-encoder scoring failed", exc_info=True)
+                scores.append(0.0)
+        return scores
 
     @staticmethod
     def _candidate_to_text(candidate: FusedCandidate) -> str:

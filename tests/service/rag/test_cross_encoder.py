@@ -44,6 +44,57 @@ def test_cross_encoder_respects_top_k():
     assert len(reranked) == 3
 
 
+def test_cross_encoder_prefers_batch_scoring():
+    """When the scorer exposes score_batch, rerank must use a single batched
+    call and not fall back to per-item score()."""
+    class BatchScorer:
+        def __init__(self):
+            self.batch_calls = 0
+            self.item_calls = 0
+
+        def score(self, query, text):
+            self.item_calls += 1
+            return 0.1
+
+        def score_batch(self, query, texts):
+            self.batch_calls += 1
+            return [float(len(set(query) & set(t))) for t in texts]
+
+    scorer = BatchScorer()
+    candidates = [_make_candidate(f"dish:{i}", f"菜{i}", f"描述{i}") for i in range(5)]
+    reranker = CrossEncoderReranker(scorer=scorer)
+
+    reranked = reranker.rerank("辣", candidates, top_k=3)
+
+    assert scorer.batch_calls == 1
+    assert scorer.item_calls == 0
+    assert len(reranked) == 3
+
+
+def test_cross_encoder_batch_error_falls_back_to_per_item():
+    """A failing score_batch must degrade to per-item score(), not crash."""
+    class FlakyBatch:
+        def __init__(self):
+            self.item_calls = 0
+
+        def score(self, query, text):
+            self.item_calls += 1
+            return 0.5
+
+        def score_batch(self, query, texts):
+            raise RuntimeError("batch boom")
+
+    scorer = FlakyBatch()
+    candidates = [_make_candidate("dish:1", "红烧肉", "经典红烧肉")]
+    reranker = CrossEncoderReranker(scorer=scorer)
+
+    reranked = reranker.rerank("红烧肉", candidates, top_k=1)
+
+    assert scorer.item_calls == 1
+    assert len(reranked) == 1
+    assert reranked[0].cross_encoder_score == 0.5
+
+
 def test_cross_encoder_fallback_on_failure():
     class FailingScorer:
         def score(self, query, text):

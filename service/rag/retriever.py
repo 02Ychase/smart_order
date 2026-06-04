@@ -141,7 +141,13 @@ class AdvancedRagRetriever:
         skip_ce = eval_options.skip_cross_encoder if eval_options else False
         if not skip_ce and len(filtered) > 3:
             t0 = time.perf_counter()
-            filtered = self.cross_encoder.rerank(rerank_query, filtered, top_k=min(20, len(filtered)))
+            # Cross-encoding is the expensive step, so only score the top
+            # fusion-ranked candidates. The requested output limit always wins
+            # when larger, so we never starve high-limit queries.
+            ce_input_limit = min(len(filtered), max(output_limit, cfg.cross_encoder_input_limit))
+            filtered = self.cross_encoder.rerank(
+                rerank_query, filtered[:ce_input_limit], top_k=ce_input_limit
+            )
             ce_elapsed = (time.perf_counter() - t0) * 1000
             logger.debug("RAG cross-encoder: %d candidates after reranking", len(filtered))
 

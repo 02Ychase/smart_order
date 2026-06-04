@@ -11,7 +11,10 @@ class AppConfig:
         cache_max_size: int = 128
         cache_ttl_seconds: int = 300
         recall_limit: int = 50
-        cross_encoder_top_k: int = 20
+        # Max number of top fusion-ranked candidates to actually cross-encode.
+        # Scoring is the expensive step, so we cap the pool (the requested
+        # output limit always takes precedence when larger).
+        cross_encoder_input_limit: int = 8
         output_limit_default: int = 5
         output_limit_max: int = 20
         parallel_recall: bool = True
