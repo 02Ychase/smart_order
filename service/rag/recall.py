@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 
 from langsmith import traceable
 
@@ -286,6 +287,7 @@ class SparseVectorRecallRoute:
         self._N: int = 0
         self._tokenizer = None                         # jieba.Tokenizer (built in build_index)
         self._built: bool = False
+        self._build_lock = threading.Lock()
 
     # ── index ────────────────────────────────────────────────────────
 
@@ -363,7 +365,11 @@ class SparseVectorRecallRoute:
     @traceable(name="sparse_vector_recall")
     def recall(self, plan: RagQueryPlan, limit: int) -> list[RecallCandidate]:
         if not self._built:
-            self.build_index()
+            # Guard against concurrent rebuilds: with several RAG sub-queries
+            # running in parallel, only the first should build the index.
+            with self._build_lock:
+                if not self._built:
+                    self.build_index()
 
         if self._N == 0:
             return []

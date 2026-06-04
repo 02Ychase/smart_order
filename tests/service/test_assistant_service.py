@@ -93,6 +93,76 @@ def test_assistant_service_returns_grounded_dish_recommendations() -> None:
     assert response["citations"][0]["source_type"] == "dish"
 
 
+def test_shared_sparse_route_builds_once(monkeypatch) -> None:
+    """The BM25 sparse route is built once and reused across calls, not
+    rebuilt per request."""
+    import api.db
+    import service.catalog_service
+    import service.rag.recall as recall_mod
+    import service.assistant_service as svc_mod
+
+    svc_mod.reset_shared_sparse_route()
+
+    class _Sess:
+        def close(self):
+            pass
+
+    builds = {"n": 0}
+
+    class FakeSparse:
+        def __init__(self, catalog_service):
+            self._built = False
+
+        def build_index(self):
+            builds["n"] += 1
+            self._built = True
+
+    monkeypatch.setattr(api.db, "SessionLocal", lambda: _Sess())
+    monkeypatch.setattr(service.catalog_service, "CatalogService", lambda s: object())
+    monkeypatch.setattr(recall_mod, "SparseVectorRecallRoute", FakeSparse)
+
+    r1 = svc_mod._get_shared_sparse_route(catalog_service=object())
+    r2 = svc_mod._get_shared_sparse_route(catalog_service=object())
+
+    assert r1 is r2
+    assert r1._built is True
+    assert builds["n"] == 1
+
+    svc_mod.reset_shared_sparse_route()
+
+
+def test_shared_sparse_route_falls_back_on_build_failure(monkeypatch) -> None:
+    """If the one-time build fails (e.g. no DB), fall back to a per-request
+    route bound to the caller's catalog_service."""
+    import api.db
+    import service.rag.recall as recall_mod
+    import service.assistant_service as svc_mod
+
+    svc_mod.reset_shared_sparse_route()
+
+    def _boom():
+        raise RuntimeError("no DB")
+
+    captured = {}
+
+    class FakeSparse:
+        def __init__(self, catalog_service):
+            captured["catalog_service"] = catalog_service
+            self._built = False
+
+    monkeypatch.setattr(api.db, "SessionLocal", _boom)
+    monkeypatch.setattr(recall_mod, "SparseVectorRecallRoute", FakeSparse)
+
+    sentinel = object()
+    route = svc_mod._get_shared_sparse_route(catalog_service=sentinel)
+
+    assert isinstance(route, FakeSparse)
+    assert captured["catalog_service"] is sentinel
+    assert svc_mod._sparse_route is None  # singleton not cached on failure
+
+    svc_mod.reset_shared_sparse_route()
+
+
 def test_build_assistant_health_reports_degraded_mode_without_vector_keys(monkeypatch) -> None:
     monkeypatch.delenv("PINECONE_API_KEY", raising=False)
     monkeypatch.setenv("MODEL_NAME", "gpt-5.4")
