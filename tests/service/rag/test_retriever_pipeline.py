@@ -120,6 +120,54 @@ def test_retriever_applies_price_desc_and_limit_after_recall() -> None:
     assert [item.facts["price"] for item in evidence] == [38.0, 29.0, 24.0]
 
 
+def test_cross_encoder_pool_is_capped() -> None:
+    """The cross-encoder should only score a capped pool of top candidates,
+    not the entire filtered set, regardless of how many were recalled."""
+    from service.rag.models import RecallCandidate
+
+    candidates = [
+        RecallCandidate(
+            stable_key=f"dish:{i}",
+            source_type="dish",
+            source_id=i,
+            route="dense",
+            rank=i,
+            score=1.0 - i * 0.01,
+            facts={
+                "dish_id": i, "dish_name": f"湘菜{i}", "merchant_id": 1,
+                "merchant_name": "A", "price": 20.0, "cuisine_type": "湘菜",
+                "is_available": True,
+            },
+            citation=f"湘菜{i}",
+        )
+        for i in range(1, 31)  # 30 candidates
+    ]
+
+    captured: dict[str, int] = {}
+
+    class SpyBatchScorer:
+        def score_batch(self, query, texts):
+            captured["pool_size"] = len(texts)
+            return [0.5] * len(texts)
+
+    retriever = AdvancedRagRetriever(
+        recall_routes=[StubRecallRoute(candidates)],
+        cross_encoder=CrossEncoderReranker(scorer=SpyBatchScorer()),
+    )
+    agent_plan = AgentPlan(
+        intent="recommendation",
+        normalized_query="湘菜",
+        requires_rag=True,
+        filters={"cuisine_types": ["湘菜"], "limit": 5},
+    )
+
+    retriever.retrieve("推荐湘菜", agent_plan, memories=[], limit=5)
+
+    # 30 candidates recalled, but the cross-encoder pool is capped to
+    # max(output_limit=5, cross_encoder_input_limit=8) = 8.
+    assert captured["pool_size"] == 8
+
+
 def test_cross_encoder_and_reranker_receive_normalized_query() -> None:
     """Cross-encoder and weighted reranker should receive normalized_query, not the raw multi-step original."""
     from service.rag.models import RecallCandidate
