@@ -77,6 +77,20 @@ class AssistantVectorStore:
             logger.error(f"Semantic search failed: {e}")
             return []
 
+    def clear_namespace(self, namespace: str = "") -> bool:
+        if not self.is_ready():
+            return False
+        try:
+            kwargs = {"delete_all": True}
+            if namespace:
+                kwargs["namespace"] = namespace
+            self._index.delete(**kwargs)
+            logger.info(f"Cleared namespace: {namespace or '(default)'}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to clear namespace {namespace}: {e}")
+            return False
+
     def upsert_candidates(self, candidates: list[dict], batch_size: int = 30, namespace: str = "") -> bool:
         if not self.is_ready():
             return False

@@ -23,10 +23,15 @@ class FakeCatalogService:
 class FakeVectorStore:
     def __init__(self):
         self.upserted = []
+        self.cleared_namespaces = []
         self._ready = True
 
     def is_ready(self):
         return self._ready
+
+    def clear_namespace(self, namespace=""):
+        self.cleared_namespaces.append(namespace)
+        return True
 
     def upsert_candidates(self, candidates, batch_size=30, namespace=""):
         self.upserted.extend([(c["id"], namespace) for c in candidates])
@@ -47,6 +52,9 @@ def test_pipeline_indexes_merchants_and_dishes():
     namespaces = {item[1] for item in vector_store.upserted}
     assert "merchants" in namespaces
     assert "dishes" in namespaces
+
+    assert "merchants" in vector_store.cleared_namespaces
+    assert "dishes" in vector_store.cleared_namespaces
 
 
 def test_pipeline_skips_when_vector_store_not_ready():

@@ -16,6 +16,12 @@ class IndexingPipeline:
             return {"merchants_indexed": 0, "dishes_indexed": 0}
 
         merchants = self._catalog.list_merchants()
+
+        # Clear existing vectors before full sync
+        logger.info("Clearing existing vectors before sync")
+        self._vector_store.clear_namespace("merchants")
+        self._vector_store.clear_namespace("dishes")
+
         merchant_candidates = []
         for m in merchants:
             text = self._merchant_to_text(m)
@@ -81,28 +87,14 @@ class IndexingPipeline:
         parts = [
             m.get("name", ""),
             m.get("description", ""),
-            m.get("homepage_category", ""),
             " ".join(m.get("merchant_tags", [])),
         ]
-        if m.get("phone"):
-            parts.append(f"电话 {m['phone']}")
-        if m.get("detailed_address"):
-            parts.append(f"地址 {m['detailed_address']}")
-        if m.get("business_hours"):
-            parts.append(f"营业时间 {m['business_hours']}")
         return " ".join(part for part in parts if part)
 
     @staticmethod
     def _dish_to_text(d: dict, merchant_name: str) -> str:
         parts = [
             d.get("name", ""),
-            merchant_name,
             d.get("description", ""),
-            d.get("cuisine_type", ""),
-            d.get("flavor_profile", ""),
-            " ".join(d.get("tags", [])),
-            " ".join(d.get("ingredients", [])),
         ]
-        if d.get("price"):
-            parts.append(f"{d['price']}元")
         return " ".join(part for part in parts if part)
