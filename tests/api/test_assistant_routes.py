@@ -27,6 +27,11 @@ def assistant_test_context(monkeypatch, tmp_path) -> tuple[TestClient, object]:
     api_main = importlib.reload(api_main)
 
     client = TestClient(api_main.app, raise_server_exceptions=False)
+    # Assistant routes now require authentication; default tests run as a
+    # logged-in user. Tests that exercise the login gate clear this override.
+    api_main.app.dependency_overrides[assistant_routes.get_current_user] = (
+        lambda: type("User", (), {"id": 1})()
+    )
     return client, assistant_routes
 
 
@@ -171,6 +176,53 @@ def test_assistant_chat_can_return_off_topic(assistant_test_context, monkeypatch
 
     assert response.status_code == 200
     assert response.json()["response_type"] == "off_topic"
+
+
+def test_assistant_chat_requires_login(assistant_test_context) -> None:
+    client, assistant_routes = assistant_test_context
+    # Simulate an anonymous request by removing the auth override.
+    client.app.dependency_overrides.pop(assistant_routes.get_current_user, None)
+
+    response = client.post("/assistant/chat", json={"message": "推荐一个菜"})
+
+    assert response.status_code == 401
+
+
+def test_assistant_chat_stream_requires_login(assistant_test_context) -> None:
+    client, assistant_routes = assistant_test_context
+    client.app.dependency_overrides.pop(assistant_routes.get_current_user, None)
+
+    response = client.post("/assistant/chat/stream", json={"message": "推荐一个菜"})
+
+    assert response.status_code == 401
+
+
+def test_assistant_chat_uses_token_identity_over_body(assistant_test_context, monkeypatch) -> None:
+    """The route derives user_id from the token and ignores any body user_id."""
+    client, assistant_routes = assistant_test_context
+    captured: dict = {}
+
+    class CapturingAssistantService:
+        def __init__(self, session):
+            pass
+
+        async def async_chat(self, request):
+            captured["user_id"] = request.user_id
+            return {"session_id": "s1", "message": "ok"}
+
+    monkeypatch.setattr(assistant_routes, "AssistantService", CapturingAssistantService)
+    client.app.dependency_overrides[assistant_routes.get_current_user] = (
+        lambda: type("User", (), {"id": 9})()
+    )
+
+    response = client.post(
+        "/assistant/chat",
+        json={"message": "把这些加入购物车", "user_id": 999},
+    )
+
+    assert response.status_code == 200
+    # Body claimed 999, but the authenticated user (9) is used.
+    assert captured["user_id"] == 9
 
 
 def test_assistant_health_reports_dependency_flags(assistant_test_context, monkeypatch) -> None:

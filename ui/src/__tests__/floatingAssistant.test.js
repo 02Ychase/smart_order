@@ -1,19 +1,68 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { describe, expect, test, vi } from 'vitest'
+import { beforeEach, describe, expect, test, vi } from 'vitest'
 
-const { streamChatWithAssistant } = vi.hoisted(() => ({
+const holder = vi.hoisted(() => ({
   streamChatWithAssistant: vi.fn(),
+  currentUser: null,
 }))
 
 vi.mock('../api/assistant', () => ({
-  streamChatWithAssistant,
+  streamChatWithAssistant: holder.streamChatWithAssistant,
 }))
+
+vi.mock('../composables/useAuth', async () => {
+  const { ref } = await import('vue')
+  holder.currentUser = ref({ id: 1 })
+  return { useAuth: () => ({ currentUser: holder.currentUser }) }
+})
 
 import FloatingAssistant from '../components/home/FloatingAssistant.vue'
 
+const STUBS = {
+  'el-input': {
+    props: ['modelValue'],
+    emits: ['update:modelValue'],
+    template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+  },
+  'el-button': {
+    emits: ['click'],
+    template: '<button @click="$emit(\'click\')"><slot /></button>',
+  },
+  'el-tag': { template: '<span><slot /></span>' },
+  'el-scrollbar': { template: '<div><slot /></div>' },
+}
+
+const mountAssistant = () =>
+  mount(FloatingAssistant, {
+    props: { initialOpen: true },
+    global: { stubs: STUBS },
+  })
+
 describe('FloatingAssistant', () => {
+  beforeEach(() => {
+    holder.streamChatWithAssistant.mockReset()
+    // Default to a logged-in user so the panel opens.
+    holder.currentUser.value = { id: 1 }
+  })
+
+  test('blocks opening when logged out and emits request-login', async () => {
+    holder.currentUser.value = null
+    const wrapper = mountAssistant()
+    await flushPromises()
+
+    // Panel stays closed: launcher shown, no composer input rendered.
+    expect(wrapper.find('.launcher').exists()).toBe(true)
+    expect(wrapper.find('input').exists()).toBe(false)
+
+    await wrapper.find('.launcher').trigger('click')
+
+    expect(wrapper.emitted('request-login')).toBeTruthy()
+    // Still closed after the gated click.
+    expect(wrapper.find('input').exists()).toBe(false)
+  })
+
   test('submits a user message and renders the clarification question', async () => {
-    streamChatWithAssistant.mockResolvedValueOnce({
+    holder.streamChatWithAssistant.mockResolvedValueOnce({
       session_id: 'session-1',
       message: '请告诉我这顿大概几个人吃、预算多少？',
       needs_clarification: true,
@@ -32,30 +81,14 @@ describe('FloatingAssistant', () => {
       suggested_actions: [],
     })
 
-    const wrapper = mount(FloatingAssistant, {
-      props: { initialOpen: true },
-      global: {
-        stubs: {
-          'el-input': {
-            props: ['modelValue'],
-            emits: ['update:modelValue'],
-            template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
-          },
-          'el-button': {
-            emits: ['click'],
-            template: '<button @click="$emit(\'click\')"><slot /></button>',
-          },
-          'el-tag': { template: '<span><slot /></span>' },
-          'el-scrollbar': { template: '<div><slot /></div>' },
-        },
-      },
-    })
+    const wrapper = mountAssistant()
+    await flushPromises()
 
     await wrapper.find('input').setValue('推荐几种川菜')
     await wrapper.find('.send-btn').trigger('click')
     await flushPromises()
 
-    expect(streamChatWithAssistant).toHaveBeenCalledWith(
+    expect(holder.streamChatWithAssistant).toHaveBeenCalledWith(
       {
         message: '推荐几种川菜',
         session_id: null,
@@ -70,7 +103,7 @@ describe('FloatingAssistant', () => {
   })
 
   test('renders recommendation cards and citations from the assistant response', async () => {
-    streamChatWithAssistant.mockResolvedValueOnce({
+    holder.streamChatWithAssistant.mockResolvedValueOnce({
       session_id: 'session-1',
       message: '结合商家数据、菜品价格和匹配理由，我推荐：\n1. 鱼香肉丝（兰姨小炒，28元）：匹配川菜偏好',
       needs_clarification: false,
@@ -106,24 +139,8 @@ describe('FloatingAssistant', () => {
       suggested_actions: ['查看商家详情'],
     })
 
-    const wrapper = mount(FloatingAssistant, {
-      props: { initialOpen: true },
-      global: {
-        stubs: {
-          'el-input': {
-            props: ['modelValue'],
-            emits: ['update:modelValue'],
-            template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
-          },
-          'el-button': {
-            emits: ['click'],
-            template: '<button @click="$emit(\'click\')"><slot /></button>',
-          },
-          'el-tag': { template: '<span><slot /></span>' },
-          'el-scrollbar': { template: '<div><slot /></div>' },
-        },
-      },
-    })
+    const wrapper = mountAssistant()
+    await flushPromises()
 
     await wrapper.find('input').setValue('推荐几种川菜，2个人吃，100元以内，不要花生')
     await wrapper.find('.send-btn').trigger('click')
@@ -137,7 +154,7 @@ describe('FloatingAssistant', () => {
   })
 
   test('renders pending action confirmation', async () => {
-    streamChatWithAssistant.mockResolvedValueOnce({
+    holder.streamChatWithAssistant.mockResolvedValueOnce({
       session_id: 's1',
       message: '是否加入购物车？',
       response_type: 'confirmation_required',
@@ -154,24 +171,8 @@ describe('FloatingAssistant', () => {
       executed_actions: [],
     })
 
-    const wrapper = mount(FloatingAssistant, {
-      props: { initialOpen: true },
-      global: {
-        stubs: {
-          'el-input': {
-            props: ['modelValue'],
-            emits: ['update:modelValue'],
-            template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
-          },
-          'el-button': {
-            emits: ['click'],
-            template: '<button @click="$emit(\'click\')"><slot /></button>',
-          },
-          'el-tag': { template: '<span><slot /></span>' },
-          'el-scrollbar': { template: '<div><slot /></div>' },
-        },
-      },
-    })
+    const wrapper = mountAssistant()
+    await flushPromises()
 
     await wrapper.find('input').setValue('推荐川菜并加入购物车')
     await wrapper.find('.send-btn').trigger('click')

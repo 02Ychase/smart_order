@@ -1,6 +1,6 @@
 <template>
   <!-- Launcher button -->
-  <button v-if="!panelOpen" class="launcher" @click="panelOpen = true">
+  <button v-if="!panelOpen" class="launcher" @click="openAssistant">
     <span class="launcher-icon">AI</span>
   </button>
 
@@ -117,7 +117,10 @@
 <script setup>
 import { nextTick, ref, watch } from 'vue'
 import { useAssistant } from '../../composables/useAssistant'
+import { useAuth } from '../../composables/useAuth'
 import SoPrice from '../shared/SoPrice.vue'
+
+const emit = defineEmits(['request-login'])
 
 const {
   draft,
@@ -139,8 +142,36 @@ const props = defineProps({
   initialOpen: { type: Boolean, default: false },
 })
 
-const panelOpen = ref(props.initialOpen)
+const { currentUser } = useAuth()
+
+const panelOpen = ref(false)
 const scrollArea = ref(null)
+
+// Gate the assistant behind login: opening requires an authenticated user.
+const openAssistant = () => {
+  if (!currentUser.value) {
+    emit('request-login')
+    return
+  }
+  panelOpen.value = true
+}
+
+// Auto-open for logged-in users once the session is known (auth restore is
+// async). Never auto-open — and never auto-prompt login — for anonymous users;
+// they open it explicitly via the launcher. Close the panel on logout.
+watch(
+  currentUser,
+  (user) => {
+    if (!user) {
+      panelOpen.value = false
+      return
+    }
+    if (props.initialOpen) {
+      panelOpen.value = true
+    }
+  },
+  { immediate: true },
+)
 
 const REC_PALETTE = [
   { glyph: '🍜', bg: 'linear-gradient(135deg,#fff3e0,#ffe0b2)' },

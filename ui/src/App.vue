@@ -72,7 +72,7 @@
       />
     </div>
 
-    <FloatingAssistant :initial-open="true" />
+    <FloatingAssistant :initial-open="true" @request-login="loginOpen = true" />
 
     <el-dialog v-model="loginOpen" width="420px" destroy-on-close>
       <LoginView @auth-success="loginOpen = false" />
