@@ -7,7 +7,7 @@ from typing import AsyncIterator
 from langchain_core.messages import AIMessage, HumanMessage
 
 from service.agent_runtime.graph import get_agent_graph
-from service.assistant_service import _build_runtime, _conversation_store
+from service.assistant_service import _build_runtime, _conversation_store, dispatch_memory_write
 
 
 class AssistantStreamService:
@@ -51,6 +51,9 @@ class AssistantStreamService:
         response_message = ""
 
         result = await asyncio.to_thread(graph.invoke, initial_state, config)
+        # Memory extraction (LLM) runs off the response path so it never
+        # blocks token streaming.
+        dispatch_memory_write(result)
         payload = dict(result.get("response_payload") or {})
         response_message = payload.get("message", "")
 

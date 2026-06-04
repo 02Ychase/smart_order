@@ -1,7 +1,10 @@
 import asyncio
+import atexit
+import logging
 import os
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 
 from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy.orm import Session
@@ -102,6 +105,53 @@ def _create_conversation_store() -> InMemoryConversationStore:
 _conversation_store = _create_conversation_store()
 
 
+# ── Async memory writer (off the response critical path) ────────────
+# Memory extraction calls an LLM (~tens of seconds) and must NOT block the
+# user response. It runs in a small background pool using its OWN DB session
+# so it is safe after the request-scoped session has been closed.
+
+logger = logging.getLogger(__name__)
+
+_memory_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="mem-write")
+atexit.register(lambda: _memory_executor.shutdown(wait=False))
+
+
+def _run_memory_write(snapshot: dict) -> None:
+    """Background task: extract + persist memories with a fresh DB session."""
+    from api.db import SessionLocal
+    from service.agent_runtime.nodes import write_memories_for_state
+
+    session = SessionLocal()
+    try:
+        memory_service = UserMemoryService(session)
+        write_memories_for_state(snapshot, memory_service)
+        session.commit()
+    except Exception:  # noqa: BLE001 - a background task must never crash the app
+        logger.warning("Async memory write failed", exc_info=True)
+        try:
+            session.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        session.close()
+
+
+def dispatch_memory_write(result: dict) -> None:
+    """Schedule memory extraction/persistence off the response path.
+
+    Fire-and-forget: returns immediately. Only the fields needed by the
+    memory writer are snapshotted so we do not retain the full graph state.
+    """
+    if result.get("user_id") is None:
+        return
+    snapshot = {
+        "user_id": result.get("user_id"),
+        "messages": result.get("messages", []),
+        "memory_candidates": result.get("memory_candidates"),
+    }
+    _memory_executor.submit(_run_memory_write, snapshot)
+
+
 # ── AssistantService ────────────────────────────────────────────────
 
 class AssistantService:
@@ -157,6 +207,7 @@ class AssistantService:
         state, config = self._build_invoke_input(request, session_id)
         result = graph.invoke(state, config=config)
         self._save_conversation(session_id, request.message, result)
+        dispatch_memory_write(result)
         return result["response_payload"]
 
     async def async_chat(self, request: AssistantChatRequest) -> AssistantChatResponse:
@@ -165,6 +216,7 @@ class AssistantService:
         state, config = self._build_invoke_input(request, session_id)
         result = await asyncio.to_thread(graph.invoke, state, config)
         self._save_conversation(session_id, request.message, result)
+        dispatch_memory_write(result)
         return result["response_payload"]
 
 

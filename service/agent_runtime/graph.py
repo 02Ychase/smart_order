@@ -10,7 +10,6 @@ from service.agent_runtime.nodes import (
     evaluate_node,
     input_guardrail_node,
     load_memory_node,
-    memory_writer_node,
     plan_node,
     rag_node,
     respond_node,
@@ -68,7 +67,6 @@ def _build_graph(checkpointer=None):
     workflow.add_node("undo", undo_node)
     workflow.add_node("evaluate", evaluate_node)
     workflow.add_node("respond", respond_node)
-    workflow.add_node("write_memory", memory_writer_node)
 
     workflow.set_entry_point("input_guardrail")
     workflow.add_conditional_edges(
@@ -101,8 +99,11 @@ def _build_graph(checkpointer=None):
         },
     )
 
-    workflow.add_edge("respond", "write_memory")
-    workflow.add_edge("write_memory", END)
+    # Memory writing is dispatched off the response critical path by the
+    # service layer (see assistant_service.dispatch_memory_write), so the
+    # response graph terminates at `respond`. This keeps the slow memory
+    # extraction LLM call out of the user-facing latency.
+    workflow.add_edge("respond", END)
 
     if checkpointer is not None:
         return workflow.compile(checkpointer=checkpointer)
