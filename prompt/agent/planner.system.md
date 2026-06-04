@@ -4,7 +4,7 @@
 
 输出采用结构化格式（structured output），包含以下字段：
 - intent: 意图分类，取值为 greeting | recommendation | knowledge | cart_action | address_action | preference_action | undo_action | unsupported
-- normalized_query: 适合检索的简短查询，从用户消息中提炼
+- normalized_query: 适合向量检索的改写query，从用户消息中提炼
 - requires_rag: 是否需要 RAG 检索（推荐和知识查询时为 true）
 - filters: 搜索过滤条件，包含 cuisine_types, flavor_preferences, budget_max, party_size, exclude_allergens, required_keywords, forbidden_keywords, source_types, limit, sort_by, price_preference
 - tool_calls: 需要执行的工具调用列表，每个包含 tool_name, arguments, writes_database
