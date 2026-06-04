@@ -1,25 +1,13 @@
 from __future__ import annotations
 
 import logging
-import math
-import os
 
 from langsmith import traceable
 
-from service.cache import TieredCache
 from service.config import get_config
-from service.embedding import DEFAULT_DIMENSION, get_embedding_service
 from service.rag.models import FusedCandidate, RagQueryPlan
 
 logger = logging.getLogger(__name__)
-
-# Embedding configuration
-_EMBEDDING_DIMENSION = DEFAULT_DIMENSION
-_EMBEDDING_SIMILARITY_THRESHOLD = 0.70
-_EMBEDDING_CACHE_SIZE = 2048
-
-# Feature flag: set to "legacy" to use keyword matching, "embedding" for embedding-based
-_EMBEDDING_MODE = os.getenv("USER_PREF_MATCH_MODE", "embedding")
 
 INTENT_WEIGHTS: dict[str, dict[str, float]] = get_config().rag.intent_weights
 
@@ -149,48 +137,8 @@ def _calc_user_preference_match(
     return score / weight_sum
 
 
-_embedding_cache = TieredCache(l1_max_size=_EMBEDDING_CACHE_SIZE)
-
-
-def _get_embedding_cached(text: str) -> tuple[float, ...] | None:
-    """Get embedding vector for text via local model, cached by TieredCache."""
-    cached = _embedding_cache.get(text)
-    if cached is not None:
-        return cached
-
-    try:
-        svc = get_embedding_service()
-        embedding = svc.embed(text)
-        if embedding and len(embedding) == _EMBEDDING_DIMENSION:
-            result = tuple(embedding)
-            _embedding_cache.set(text, result)
-            return result
-        logger.error("Embedding returned unexpected dimension: %d", len(embedding) if embedding else 0)
-        return None
-    except Exception as e:
-        logger.error(f"Embedding request failed: {e}")
-        return None
-
-
-# Expose cache_clear for backward compatibility with tests
-def cache_clear():
-    _embedding_cache.clear()
-
-
-def cosine_similarity(vec1: list[float] | tuple[float, ...], vec2: list[float] | tuple[float, ...]) -> float:
-    """Compute cosine similarity between two vectors."""
-    if len(vec1) != len(vec2):
-        return 0.0
-    dot = sum(a * b for a, b in zip(vec1, vec2))
-    norm1 = math.sqrt(sum(a * a for a in vec1))
-    norm2 = math.sqrt(sum(b * b for b in vec2))
-    if norm1 == 0.0 or norm2 == 0.0:
-        return 0.0
-    return dot / (norm1 * norm2)
-
-
 def _text_overlaps_legacy(memory_content: str, candidate_text: str) -> bool:
-    """Keyword-based matching (35 Chinese cuisine keywords). Kept as fallback."""
+    """Keyword-based overlap (Chinese cuisine / flavor keywords)."""
     keywords = ["湘菜", "川菜", "粤菜", "鲁菜", "苏菜", "闽菜", "浙菜", "徽菜",
                 "辣", "麻", "酸", "甜", "苦", "咸", "清淡", "香", "鲜",
                 "面", "粉", "饭", "汤", "锅", "煲", "烧", "烤", "蒸", "炒",
@@ -203,32 +151,12 @@ def _text_overlaps_legacy(memory_content: str, candidate_text: str) -> bool:
     return False
 
 
-def _text_overlaps_embedding(memory_content: str, candidate_text: str) -> bool | None:
-    """Check semantic overlap using embedding cosine similarity.
-
-    Returns None when embedding is unavailable (API key missing, service error),
-    allowing the caller to fall back to keyword matching.
-    """
-    mem_emb = _get_embedding_cached(memory_content)
-    cand_emb = _get_embedding_cached(candidate_text)
-    if mem_emb is None or cand_emb is None:
-        return None
-    sim = cosine_similarity(list(mem_emb), list(cand_emb))
-    return sim >= _EMBEDDING_SIMILARITY_THRESHOLD
-
-
 def _text_overlaps(memory_content: str, candidate_text: str) -> bool:
-    """Unified entry point for text overlap detection.
+    """Keyword overlap between a user memory and a candidate.
 
-    Uses embedding-based similarity by default. Falls back to keyword matching
-    when embedding is unavailable (e.g., DASHSCOPE_API_KEY not set).
-    Mode is read per-call so runtime/test env var changes take effect.
+    Online embedding similarity was removed from weighted rerank: it ran the
+    local embedding model once per candidate×memory and dominated latency.
+    Preference matching now uses cheap keyword overlap; richer preference
+    signals are intended to come from a precomputed memory summary (P1).
     """
-    mode = os.getenv("USER_PREF_MATCH_MODE", "embedding")
-    if mode == "legacy":
-        return _text_overlaps_legacy(memory_content, candidate_text)
-    result = _text_overlaps_embedding(memory_content, candidate_text)
-    if result is not None:
-        return result
-    # Fallback to keyword matching when embedding is unavailable
     return _text_overlaps_legacy(memory_content, candidate_text)
