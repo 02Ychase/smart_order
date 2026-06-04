@@ -20,6 +20,14 @@ import threading
 
 logger = logging.getLogger(__name__)
 
+# HuggingFace hub access is restricted in this deployment and the models are
+# already cached locally, so default to offline mode (still overridable by
+# setting the env vars explicitly). This prevents hub metadata calls from
+# hanging at model load / startup warmup. Set before any sentence_transformers
+# import (all such imports in this codebase are lazy / inside functions).
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 DEFAULT_MODEL_NAME = "BAAI/bge-m3"
 DEFAULT_DIMENSION = 1024
 
@@ -44,9 +52,13 @@ class EmbeddingService:
 
         from sentence_transformers import SentenceTransformer
 
-        self._model = SentenceTransformer(self.model_name)
+        from service.torch_device import resolve_device
+
+        self.device = resolve_device("EMBEDDING_DEVICE")
+        self._model = SentenceTransformer(self.model_name, device=self.device)
         logger.info(
-            "Loaded embedding model: %s (dim=%d)", self.model_name, self.dimension
+            "Loaded embedding model: %s (dim=%d, device=%s)",
+            self.model_name, self.dimension, self.device,
         )
 
     # ── public API ────────────────────────────────────────────────────

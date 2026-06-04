@@ -1,7 +1,7 @@
 """Tests for service.embedding — centralized local embedding service."""
 
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import numpy as np
 
@@ -43,6 +43,35 @@ def test_default_dimension_is_1024() -> None:
 
 def test_default_model_is_bge_m3() -> None:
     assert DEFAULT_MODEL_NAME == "BAAI/bge-m3"
+
+
+def test_module_defaults_hf_offline_when_unset(monkeypatch) -> None:
+    """Importing the embedding module should default HF to offline mode when
+    the env vars are unset (models are cached, hub access restricted)."""
+    import importlib
+    import os
+
+    import service.embedding as embedding_module
+
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    importlib.reload(embedding_module)
+
+    assert os.environ.get("HF_HUB_OFFLINE") == "1"
+    assert os.environ.get("TRANSFORMERS_OFFLINE") == "1"
+
+
+def test_explicit_hf_online_is_respected(monkeypatch) -> None:
+    """An explicit HF_HUB_OFFLINE=0 must not be overridden by the default."""
+    import importlib
+    import os
+
+    import service.embedding as embedding_module
+
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
+    importlib.reload(embedding_module)
+
+    assert os.environ.get("HF_HUB_OFFLINE") == "0"
 
 
 # ── embed / embed_batch ──────────────────────────────────────────────────
@@ -132,5 +161,6 @@ def test_custom_model_name_via_env(monkeypatch) -> None:
 
     assert svc.model_name == "custom/model"
     assert svc.dimension == 768
-    mock_module.SentenceTransformer.assert_called_once_with("custom/model")
+    # device is resolved at load time (cpu/cuda); assert it is passed through.
+    mock_module.SentenceTransformer.assert_called_once_with("custom/model", device=ANY)
     reset_embedding_service()
