@@ -1,3 +1,4 @@
+import contextvars
 import json
 import logging
 
@@ -568,7 +569,10 @@ def rag_node(state: dict, config: RunnableConfig | None = None) -> dict:
     else:
         max_workers = min(4, len(pending_rag_calls))
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(_execute_single_call, c): c for c in pending_rag_calls}
+            futures = {}
+            for c in pending_rag_calls:
+                ctx = contextvars.copy_context()
+                futures[pool.submit(ctx.run, _execute_single_call, c)] = c
             for future in as_completed(futures):
                 call_obj = futures[future]
                 try:

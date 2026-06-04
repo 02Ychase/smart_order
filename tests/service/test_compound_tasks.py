@@ -1,5 +1,6 @@
 """Tests for ReAct compound task enhancements."""
 
+import contextvars
 from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import HumanMessage
@@ -383,6 +384,53 @@ def test_rag_node_batch_executes_all_pending_calls():
     # Evidence should contain items from all 3 calls (deduplicated)
     evidence_ids = {e["source_id"] for e in result["recent_evidence"]}
     assert evidence_ids == {10, 20, 30}
+
+
+def test_rag_node_batch_propagates_contextvars_to_workers():
+    """Batched RAG workers should inherit tracing context from the rag node."""
+    trace_context = contextvars.ContextVar("test_trace_context")
+    trace_context.set("rag-parent")
+
+    plan = AgentPlan(
+        intent="recommendation",
+        normalized_query="lunch",
+        requires_rag=True,
+        tool_calls=[
+            GraphToolCall("recommend_dishes", {"query": "main"}, False, step_id="recommend_dishes_0"),
+            GraphToolCall("recommend_dishes", {"query": "dessert"}, False, step_id="recommend_dishes_1"),
+        ],
+    )
+    item = StubEvidenceItem(
+        "dish", 12, 1, "dish",
+        {"dish_id": 12, "dish_name": "dish"}, [], "", 0.9,
+    )
+
+    observed_contexts = []
+
+    def retrieve(_query, **_kwargs):
+        observed_contexts.append(trace_context.get(None))
+        return [item]
+
+    mock_runtime = MagicMock()
+    mock_runtime.retriever = MagicMock()
+    mock_runtime.retriever.retrieve = retrieve
+
+    state = {
+        "current_plan": plan,
+        "tool_results": [],
+        "recent_evidence": [],
+        "loaded_user_memories": [],
+        "messages": [HumanMessage(content="recommend lunch")],
+    }
+
+    with patch("service.agent_runtime.nodes.get_runtime", return_value=mock_runtime), \
+         patch("service.config.get_config") as mock_cfg:
+        mock_cfg.return_value.rag.output_limit_default = 5
+        mock_cfg.return_value.rag.output_limit_max = 10
+        result = rag_node(state)
+
+    assert len(result["tool_results"]) == 2
+    assert observed_contexts == ["rag-parent", "rag-parent"]
 
 
 def test_rag_node_batch_skips_already_completed_and_preserves_evidence():
