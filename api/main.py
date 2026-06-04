@@ -1,7 +1,19 @@
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Preload heavy models / BM25 index so the first request doesn't pay
+    # cold-start. Best-effort and gated (skipped under pytest / when disabled).
+    from service.warmup import run_startup_warmup, should_warmup
+
+    if should_warmup():
+        run_startup_warmup()
+    yield
 
 from api.routes import address_router, agent_context_router, assistant_router, auth_router, cart_router, catalog_router, coupons_router, favorites_router, health_router, orders_router
 
@@ -46,6 +58,7 @@ class RouteSurfaceFastAPI(FastAPI):
 app = RouteSurfaceFastAPI(
     title="smart-order api",
     description="Phase one delivery business foundation APIs",
+    lifespan=lifespan,
 )
 
 app.include_router(auth_router)
