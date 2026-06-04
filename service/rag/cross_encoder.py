@@ -11,6 +11,12 @@ from service.rag.models import FusedCandidate
 
 logger = logging.getLogger(__name__)
 
+# Default to HuggingFace offline mode (models are cached; hub access is
+# restricted). Overridable by setting the env vars explicitly. See the same
+# note in service/embedding.py.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+
 # ── Singleton for local cross-encoder model ──────────────────────────────
 
 _DEFAULT_RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"

@@ -45,6 +45,35 @@ def test_default_model_is_bge_m3() -> None:
     assert DEFAULT_MODEL_NAME == "BAAI/bge-m3"
 
 
+def test_module_defaults_hf_offline_when_unset(monkeypatch) -> None:
+    """Importing the embedding module should default HF to offline mode when
+    the env vars are unset (models are cached, hub access restricted)."""
+    import importlib
+    import os
+
+    import service.embedding as embedding_module
+
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    importlib.reload(embedding_module)
+
+    assert os.environ.get("HF_HUB_OFFLINE") == "1"
+    assert os.environ.get("TRANSFORMERS_OFFLINE") == "1"
+
+
+def test_explicit_hf_online_is_respected(monkeypatch) -> None:
+    """An explicit HF_HUB_OFFLINE=0 must not be overridden by the default."""
+    import importlib
+    import os
+
+    import service.embedding as embedding_module
+
+    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
+    importlib.reload(embedding_module)
+
+    assert os.environ.get("HF_HUB_OFFLINE") == "0"
+
+
 # ── embed / embed_batch ──────────────────────────────────────────────────
 
 
