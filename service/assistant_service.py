@@ -54,19 +54,75 @@ def _get_cached_components():
     return _dense_route, _cross_encoder, _query_planner, _reranker
 
 
+# ── Shared BM25 sparse index (built once, reused read-only) ─────────
+# The BM25 index is catalog-derived (identical across users/requests) and
+# purely in-memory after build, so building it per request — as the old code
+# did — meant a full catalog scan + jieba tokenization on every request. We
+# build it once in a module-level singleton and share it across request
+# threads. Catalog changes require a process restart (or a future explicit
+# invalidation hook); see reset_shared_sparse_route().
+
+_sparse_route = None
+_sparse_route_lock = threading.Lock()
+
+
+def _get_shared_sparse_route(catalog_service):
+    """Return the process-wide pre-built BM25 sparse route.
+
+    Built once with its own short-lived session. If the one-time build fails
+    (e.g. no DB configured), fall back to a per-request route bound to the
+    caller's catalog_service so behaviour degrades gracefully.
+    """
+    global _sparse_route
+    if _sparse_route is not None and _sparse_route._built:
+        return _sparse_route
+
+    from service.rag.recall import SparseVectorRecallRoute
+
+    with _sparse_route_lock:
+        if _sparse_route is not None and _sparse_route._built:
+            return _sparse_route
+        try:
+            from api.db import SessionLocal
+            from service.catalog_service import CatalogService
+
+            session = SessionLocal()
+            try:
+                route = SparseVectorRecallRoute(CatalogService(session))
+                route.build_index()
+            finally:
+                session.close()
+            _sparse_route = route
+            return _sparse_route
+        except Exception:
+            logger.warning(
+                "Failed to pre-build shared BM25 index; falling back to a "
+                "per-request sparse route",
+                exc_info=True,
+            )
+            return SparseVectorRecallRoute(catalog_service)
+
+
+def reset_shared_sparse_route() -> None:
+    """Drop the cached BM25 singleton (tests / future catalog invalidation)."""
+    global _sparse_route
+    with _sparse_route_lock:
+        _sparse_route = None
+
+
 def _build_retriever(session):
     """Build a per-request retriever reusing cached stateless sub-components."""
     dense_route, cross_encoder, query_planner, reranker = _get_cached_components()
 
     from api.db import SessionLocal
     from service.catalog_service import CatalogService
-    from service.rag.recall import BusinessRecallRoute, SparseVectorRecallRoute, SqlCatalogRecallRoute
+    from service.rag.recall import BusinessRecallRoute, SqlCatalogRecallRoute
 
     catalog_service = CatalogService(session) if session is not None else None
     recall_routes = [dense_route]
     if catalog_service is not None:
         recall_routes.extend([
-            SparseVectorRecallRoute(catalog_service),
+            _get_shared_sparse_route(catalog_service),
             SqlCatalogRecallRoute(catalog_service),
             BusinessRecallRoute(catalog_service),
         ])

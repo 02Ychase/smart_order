@@ -95,6 +95,18 @@ def test_list_merchants_called_once() -> None:
     assert svc.list_merchants_call_count == 1
 
 
+def test_recall_does_not_rebuild_when_already_built() -> None:
+    """Repeated recalls on a built route must not trigger another full
+    catalog scan / index rebuild."""
+    route, svc = _build_simple_route()
+    assert svc.list_merchants_call_count == 1
+
+    route.recall(_plan(), limit=5)
+    route.recall(_plan(), limit=5)
+
+    assert svc.list_merchants_call_count == 1
+
+
 # ── Inverted index ────────────────────────────────────────────────────
 
 
