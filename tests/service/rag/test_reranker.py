@@ -1,17 +1,12 @@
 from unittest.mock import MagicMock, patch
 
-from service.embedding import DEFAULT_DIMENSION
 from service.rag.models import FusedCandidate, RagQueryPlan
 from service.rag.reranker import (
     INTENT_WEIGHTS,
     WeightedReranker,
     _calc_user_preference_match,
-    _get_embedding_cached,
     _text_overlaps,
-    _text_overlaps_embedding,
-    cache_clear,
     _text_overlaps_legacy,
-    cosine_similarity,
 )
 
 
@@ -124,35 +119,6 @@ def test_all_weights_sum_to_one() -> None:
         assert abs(total - 1.0) < 0.001, f"{intent} weights sum to {total}, expected 1.0"
 
 
-# ── Cosine similarity tests ──────────────────────────────────────────────────
-
-
-def test_cosine_similarity_identical_vectors() -> None:
-    vec = [1.0, 2.0, 3.0]
-    assert abs(cosine_similarity(vec, vec) - 1.0) < 0.0001
-
-
-def test_cosine_similarity_orthogonal_vectors() -> None:
-    assert abs(cosine_similarity([1.0, 0.0], [0.0, 1.0]) - 0.0) < 0.0001
-
-
-def test_cosine_similarity_opposite_vectors() -> None:
-    assert abs(cosine_similarity([1.0, 2.0], [-1.0, -2.0]) + 1.0) < 0.0001
-
-
-def test_cosine_similarity_different_lengths_returns_zero() -> None:
-    assert cosine_similarity([1.0, 2.0], [1.0, 2.0, 3.0]) == 0.0
-
-
-def test_cosine_similarity_zero_vector() -> None:
-    assert cosine_similarity([0.0, 0.0], [1.0, 2.0]) == 0.0
-
-
-def test_cosine_similarity_positive_correlation() -> None:
-    sim = cosine_similarity([1.0, 0.5, 0.0], [0.8, 0.4, 0.0])
-    assert sim > 0.99
-
-
 # ── Legacy keyword overlap tests ─────────────────────────────────────────────
 
 
@@ -168,109 +134,17 @@ def test_text_overlaps_legacy_matches_cuisine_keyword() -> None:
     assert _text_overlaps_legacy("爱吃湘菜", "湘菜 小炒黄牛肉") is True
 
 
-# ── Embedding-based overlap tests ────────────────────────────────────────────
+# ── _text_overlaps is now keyword-only ──────────────────────────────────────
 
 
-def _make_embed_side_effect(similarity: float, dimension: int = DEFAULT_DIMENSION):
-    """Create a side_effect for EmbeddingService.embed that returns vectors with exact target cosine similarity.
-
-    Uses unit vectors: base = [1, 0, 0, ...], second = [sim, sqrt(1-sim^2), 0, ...].
-    """
-    import math
-
-    base = [0.0] * dimension
-    base[0] = 1.0
-
-    if similarity > 0.999:
-        second = base[:]
-    else:
-        second = [0.0] * dimension
-        second[0] = similarity
-        second[1] = math.sqrt(1.0 - similarity ** 2)
-
-    call_count = [0]
-
-    def side_effect(text):
-        call_count[0] += 1
-        return base if call_count[0] == 1 else second
-
-    return side_effect
+def test_text_overlaps_is_keyword_only() -> None:
+    """Online embedding similarity was removed; _text_overlaps must behave
+    exactly like the keyword matcher (no embedding model calls)."""
+    assert _text_overlaps("我喜欢吃辣", "川味麻辣 鱼香肉丝") is True
+    assert _text_overlaps("我喜欢清淡口味", "麻辣火锅") is False
 
 
-def test_text_overlaps_embedding_high_similarity() -> None:
-    cache_clear()
-    mock_embed = _make_embed_side_effect(similarity=0.90)
-
-    with patch("service.rag.reranker.get_embedding_service") as mock_svc:
-        mock_svc.return_value.embed.side_effect = mock_embed
-        result = _text_overlaps_embedding("我爱吃辣的川菜", "川味麻辣 鱼香肉丝")
-
-    assert result is True
-
-
-def test_text_overlaps_embedding_low_similarity() -> None:
-    cache_clear()
-    mock_embed = _make_embed_side_effect(similarity=0.20)
-
-    with patch("service.rag.reranker.get_embedding_service") as mock_svc:
-        mock_svc.return_value.embed.side_effect = mock_embed
-        result = _text_overlaps_embedding("我爱吃辣的川菜", "清淡粤菜 白切鸡")
-
-    assert result is False
-
-
-def test_text_overlaps_embedding_returns_none_on_service_error() -> None:
-    cache_clear()
-
-    with patch("service.rag.reranker.get_embedding_service") as mock_svc:
-        mock_svc.return_value.embed.side_effect = RuntimeError("model not loaded")
-        result = _text_overlaps_embedding("anything", "anything else")
-
-    assert result is None
-
-
-# ── Unified _text_overlaps mode switching ────────────────────────────────────
-
-
-def test_text_overlaps_uses_embedding_mode_by_default(monkeypatch) -> None:
-    monkeypatch.setenv("USER_PREF_MATCH_MODE", "embedding")
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
-    cache_clear()
-
-    with patch("service.rag.reranker._text_overlaps_embedding", return_value=True) as mock_emb:
-        with patch("service.rag.reranker._text_overlaps_legacy", return_value=False) as mock_leg:
-            result = _text_overlaps("content", "candidate text")
-    assert result is True
-    mock_emb.assert_called_once()
-    mock_leg.assert_not_called()
-
-
-def test_text_overlaps_falls_back_to_keyword_when_embedding_unavailable(monkeypatch) -> None:
-    monkeypatch.setenv("USER_PREF_MATCH_MODE", "embedding")
-    cache_clear()
-
-    with patch("service.rag.reranker._text_overlaps_embedding", return_value=None) as mock_emb:
-        with patch("service.rag.reranker._text_overlaps_legacy", return_value=True) as mock_leg:
-            result = _text_overlaps("content", "candidate text")
-    assert result is True
-    mock_emb.assert_called_once()
-    mock_leg.assert_called_once()
-
-
-def test_text_overlaps_uses_legacy_when_configured(monkeypatch) -> None:
-    monkeypatch.setenv("USER_PREF_MATCH_MODE", "legacy")
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
-    cache_clear()
-
-    with patch("service.rag.reranker._text_overlaps_embedding", return_value=True) as mock_emb:
-        with patch("service.rag.reranker._text_overlaps_legacy", return_value=True) as mock_leg:
-            result = _text_overlaps("content", "candidate text")
-    assert result is True
-    mock_leg.assert_called_once()
-    mock_emb.assert_not_called()
-
-
-# ── User preference matching with embedding similarity ───────────────────────
+# ── User preference matching (keyword overlap) ───────────────────────────────
 
 
 def _make_fused_candidate(**facts) -> FusedCandidate:
@@ -299,8 +173,6 @@ def test_user_pref_match_returns_zero_with_no_memories() -> None:
 
 
 def test_user_pref_match_scores_high_similarity_memories_higher() -> None:
-    cache_clear()
-
     memories = [
         {"content": "我喜欢吃辣的川菜", "confidence": 0.9},
         {"content": "喜欢粤菜清淡口味", "confidence": 0.8},
@@ -419,44 +291,6 @@ def test_user_pref_match_fact_in_candidate_facts_dict(monkeypatch) -> None:
 
     assert "user_preference_match" in candidate.facts
     assert candidate.facts["user_preference_match"] > 0.0
-
-
-# ── Embedding caching tests ──────────────────────────────────────────────────
-
-
-def test_get_embedding_cached_reuses_results() -> None:
-    cache_clear()
-
-    fake_embedding = [0.1] * DEFAULT_DIMENSION
-
-    with patch("service.rag.reranker.get_embedding_service") as mock_svc:
-        mock_svc.return_value.embed.return_value = fake_embedding
-        result1 = _get_embedding_cached("川菜麻辣")
-        result2 = _get_embedding_cached("川菜麻辣")
-        result3 = _get_embedding_cached("粤菜清淡")
-
-    assert result1 == result2 == tuple(fake_embedding)
-    assert mock_svc.return_value.embed.call_count == 2  # "川菜麻辣" cached, "粤菜清淡" new call
-
-
-def test_get_embedding_cached_returns_none_on_service_failure() -> None:
-    cache_clear()
-
-    with patch("service.rag.reranker.get_embedding_service") as mock_svc:
-        mock_svc.return_value.embed.return_value = []  # empty → wrong dimension
-        result = _get_embedding_cached("some text")
-
-    assert result is None
-
-
-def test_get_embedding_cached_returns_none_on_exception() -> None:
-    cache_clear()
-
-    with patch("service.rag.reranker.get_embedding_service") as mock_svc:
-        mock_svc.return_value.embed.side_effect = RuntimeError("model error")
-        result = _get_embedding_cached("text")
-
-    assert result is None
 
 
 # ── Preferred dish / merchant boosting tests ─────────────────────────────────
