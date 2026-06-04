@@ -1,7 +1,11 @@
 from langchain_core.messages import HumanMessage
 
 from service.agent_runtime.graph import build_agent_graph
-from service.agent_runtime.nodes import load_memory_node, memory_writer_node
+from service.agent_runtime.nodes import (
+    load_memory_node,
+    memory_writer_node,
+    write_memories_for_state,
+)
 from service.agent_runtime.runtime import AgentRuntimeContext
 from service.agent_runtime.state import AgentPlan
 
@@ -89,7 +93,30 @@ class GreetingPlanner:
         return AgentPlan(intent="greeting", should_answer_directly=True)
 
 
-def test_graph_writes_memory_candidates_after_response() -> None:
+def test_write_memories_for_state_saves_high_confidence() -> None:
+    """Core helper persists high-confidence candidates (used by the
+    background worker and memory_writer_node)."""
+    service = StubMemoryService()
+    state = {
+        "user_id": 9,
+        "memory_candidates": [
+            {
+                "memory_type": "food_preference",
+                "content": "prefers spicy Hunan dishes",
+                "confidence": 0.9,
+            }
+        ],
+    }
+
+    saved = write_memories_for_state(state, service)
+
+    assert saved[0]["content"] == "prefers spicy Hunan dishes"
+    assert service.saved[0]["content"] == "prefers spicy Hunan dishes"
+
+
+def test_graph_does_not_write_memory_synchronously() -> None:
+    """Memory writing was moved off the response graph to a background
+    worker, so the graph itself must no longer persist memories inline."""
     service = StubMemoryService()
     graph = build_agent_graph()
 
@@ -114,5 +141,41 @@ def test_graph_writes_memory_candidates_after_response() -> None:
         config={"configurable": {"thread_id": "s1", "runtime": runtime}},
     )
 
-    assert result["saved_memories"][0]["content"] == "prefers spicy Hunan dishes"
-    assert service.saved[0]["content"] == "prefers spicy Hunan dishes"
+    # Graph terminates at `respond`; it no longer writes memory inline.
+    assert not result.get("saved_memories")
+    assert service.saved == []
+
+
+def test_dispatch_memory_write_snapshots_and_submits(monkeypatch) -> None:
+    """dispatch_memory_write is fire-and-forget: it snapshots the needed
+    fields and hands them to the background executor."""
+    from service import assistant_service
+
+    captured: dict = {}
+    monkeypatch.setattr(
+        assistant_service._memory_executor,
+        "submit",
+        lambda fn, snap: captured.update(fn=fn, snap=snap),
+    )
+
+    assistant_service.dispatch_memory_write(
+        {"user_id": 7, "messages": [HumanMessage(content="hi")], "memory_candidates": []}
+    )
+
+    assert captured["snap"]["user_id"] == 7
+    assert captured["fn"] is assistant_service._run_memory_write
+
+
+def test_dispatch_memory_write_skips_anonymous_users(monkeypatch) -> None:
+    from service import assistant_service
+
+    called = False
+
+    def _fail(*_args, **_kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(assistant_service._memory_executor, "submit", _fail)
+    assistant_service.dispatch_memory_write({"user_id": None, "messages": []})
+
+    assert called is False

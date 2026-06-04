@@ -90,13 +90,17 @@ def load_memory_node(state: dict, config: RunnableConfig | None = None) -> dict:
     return {**turn_reset, "loaded_user_memories": memories, "metrics": collector.to_log_dict()}
 
 
-def memory_writer_node(state: dict, config: RunnableConfig | None = None) -> dict:
-    runtime = get_runtime(config)
-    memory_service = runtime.memory_service if runtime else None
+def write_memories_for_state(state: dict, memory_service) -> list[dict]:
+    """Extract (if needed) and persist high-confidence memory candidates.
 
+    Pure helper with no LangGraph/runtime coupling so it can run both via
+    ``memory_writer_node`` (direct/unit tests) and in a background worker
+    off the response critical path. Memory extraction calls an LLM and is
+    therefore intentionally kept out of the synchronous response graph.
+    """
     user_id = state.get("user_id")
     if user_id is None or memory_service is None:
-        return {"saved_memories": []}
+        return []
 
     candidates = list(state.get("memory_candidates") or [])
 
@@ -115,7 +119,13 @@ def memory_writer_node(state: dict, config: RunnableConfig | None = None) -> dic
                 confidence=float(candidate["confidence"]),
             )
         )
-    return {"saved_memories": saved}
+    return saved
+
+
+def memory_writer_node(state: dict, config: RunnableConfig | None = None) -> dict:
+    runtime = get_runtime(config)
+    memory_service = runtime.memory_service if runtime else None
+    return {"saved_memories": write_memories_for_state(state, memory_service)}
 
 
 def _extract_memory_candidates(state: dict) -> list[dict]:
