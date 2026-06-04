@@ -55,3 +55,55 @@ def test_stream_chunk_types():
     valid_types = {"token", "payload", "done"}
     for t in valid_types:
         assert isinstance(t, str)
+
+
+class _StubGraph:
+    """Returns a fixed evidence-bearing result without running the real graph."""
+
+    def __init__(self, result):
+        self._result = result
+
+    def invoke(self, state, config):
+        return {**self._result, "messages": state["messages"]}
+
+
+@pytest.mark.asyncio
+async def test_stream_overrides_message_on_price_hallucination(monkeypatch):
+    """Tokens stream optimistically, but if the full text hallucinates a price
+    not present in evidence, the authoritative payload message is overridden
+    with the safe template."""
+    service = AssistantStreamService(session=None)
+    service._graph = _StubGraph({
+        "response_payload": {
+            "response_type": "recommendation",
+            "recommendations": [],
+            "message": "",
+        },
+        "recent_evidence": [{
+            "source_type": "dish",
+            "source_id": 1,
+            "merchant_id": 1,
+            "title": "宫保鸡丁",
+            "facts": {"price": 20.0, "dish_name": "宫保鸡丁", "merchant_name": "川味轩"},
+            "score": 1.0,
+        }],
+        "tool_results": [],
+        "current_plan": None,
+        "last_recommendations": [],
+        "user_id": 1,
+    })
+
+    async def _fake_grounded(self, **kwargs):
+        for ch in "推荐你花99元尝尝":  # 99元 is NOT in evidence (only 20元)
+            yield ch
+
+    monkeypatch.setattr(AssistantStreamService, "_stream_grounded_response", _fake_grounded)
+
+    chunks = [c async for c in service.stream_chat_tokens("推荐", session_id="halluc-test", user_id=1)]
+
+    # Tokens were streamed optimistically (low TTFT preserved)...
+    assert "".join(c["content"] for c in chunks if c["type"] == "token") == "推荐你花99元尝尝"
+    # ...but the final authoritative payload message dropped the hallucinated price.
+    payload = next(c["data"] for c in chunks if c["type"] == "payload")
+    assert "99" not in payload["message"]
+    _conversation_store.clear("halluc-test")

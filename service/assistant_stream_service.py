@@ -102,6 +102,22 @@ class AssistantStreamService:
             if streamed_message:
                 response_message = streamed_message
                 payload["message"] = streamed_message
+                # Post-stream output safety. The streamed prose was shown
+                # optimistically; validate the full text for price
+                # hallucination and override the authoritative payload
+                # message with a safe template on failure.
+                from service.config import get_config
+                if get_config().guardrails.enable_output_guardrail:
+                    from service.guardrails import OutputGuardrail
+                    if not OutputGuardrail().check(streamed_message, llm_evidence).allowed:
+                        from service.agent_runtime.nodes import (
+                            _build_structured_data,
+                            _template_recommendation,
+                        )
+                        recommendations, _ = _build_structured_data(llm_evidence)
+                        safe_message = _template_recommendation(recommendations)
+                        payload["message"] = safe_message
+                        response_message = safe_message
         else:
             async for token in self._stream_text(response_message):
                 yield {"type": "token", "content": token}
@@ -136,12 +152,9 @@ class AssistantStreamService:
 
             from service.agent_runtime.nodes import (
                 ACTION_TOOL_NAMES,
-                _build_structured_data,
                 _format_evidence_for_llm,
-                _template_recommendation,
             )
             from service.agent_runtime.prompts import PromptRegistry
-            from service.config import get_config
             import os
 
             model_name = os.getenv("MODEL_NAME")
@@ -177,35 +190,20 @@ class AssistantStreamService:
             parts.append("\n请基于证据和已完成操作生成自然回复。")
             prompt = "\n".join(parts)
 
-            if get_config().guardrails.enable_output_guardrail:
-                chain = ChatPromptTemplate.from_messages([
-                    ("system", "{system_instruction}"),
-                    ("human", "{query}"),
-                ]) | init_chat_model(model=model_name, model_provider="openai")
+            # Always stream tokens in real time so the user sees the first
+            # token as soon as the LLM produces it (low TTFT). Output safety
+            # (price-hallucination check) is enforced after streaming by the
+            # caller, which validates the full text and overrides the
+            # authoritative payload message with a safe template on failure.
+            chain = ChatPromptTemplate.from_messages([
+                ("system", "{system_instruction}"),
+                ("human", "{query}"),
+            ]) | init_chat_model(model=model_name, model_provider="openai")
 
-                result = await asyncio.to_thread(
-                    chain.invoke, {"system_instruction": system_prompt, "query": prompt}
-                )
-                llm_response = getattr(result, "content", str(result))
-
-                from service.guardrails import OutputGuardrail
-                output_result = OutputGuardrail().check(llm_response, evidence)
-                if not output_result.allowed:
-                    recommendations, _ = _build_structured_data(evidence)
-                    llm_response = _template_recommendation(recommendations)
-
-                async for token in self._stream_text(llm_response):
-                    yield token
-            else:
-                chain = ChatPromptTemplate.from_messages([
-                    ("system", "{system_instruction}"),
-                    ("human", "{query}"),
-                ]) | init_chat_model(model=model_name, model_provider="openai")
-
-                async for chunk in chain.astream({"system_instruction": system_prompt, "query": prompt}):
-                    content = getattr(chunk, "content", "")
-                    if content:
-                        yield content
+            async for chunk in chain.astream({"system_instruction": system_prompt, "query": prompt}):
+                content = getattr(chunk, "content", "")
+                if content:
+                    yield content
         except Exception:
             from service.agent_runtime.nodes import _build_structured_data, _template_recommendation
 
@@ -214,6 +212,7 @@ class AssistantStreamService:
                 yield token
 
     async def _stream_text(self, text: str) -> AsyncIterator[str]:
+        # Emit template / non-LLM text in real chunks without artificial
+        # per-character delay (the previous sleep faked a streaming effect).
         for char in text or "":
             yield char
-            await asyncio.sleep(0.02)
