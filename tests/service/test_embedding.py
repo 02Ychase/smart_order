@@ -1,7 +1,7 @@
 """Tests for service.embedding — centralized local embedding service."""
 
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import numpy as np
 
@@ -132,5 +132,6 @@ def test_custom_model_name_via_env(monkeypatch) -> None:
 
     assert svc.model_name == "custom/model"
     assert svc.dimension == 768
-    mock_module.SentenceTransformer.assert_called_once_with("custom/model")
+    # device is resolved at load time (cpu/cuda); assert it is passed through.
+    mock_module.SentenceTransformer.assert_called_once_with("custom/model", device=ANY)
     reset_embedding_service()

@@ -44,9 +44,13 @@ class EmbeddingService:
 
         from sentence_transformers import SentenceTransformer
 
-        self._model = SentenceTransformer(self.model_name)
+        from service.torch_device import resolve_device
+
+        self.device = resolve_device("EMBEDDING_DEVICE")
+        self._model = SentenceTransformer(self.model_name, device=self.device)
         logger.info(
-            "Loaded embedding model: %s (dim=%d)", self.model_name, self.dimension
+            "Loaded embedding model: %s (dim=%d, device=%s)",
+            self.model_name, self.dimension, self.device,
         )
 
     # ── public API ────────────────────────────────────────────────────

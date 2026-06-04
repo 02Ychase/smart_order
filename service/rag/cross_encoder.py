@@ -97,6 +97,7 @@ class _LocalCrossEncoder:
             "RERANKER_MODEL", _DEFAULT_RERANKER_MODEL
         )
         self._model = None
+        self._device: str | None = None
         self._model_lock = threading.Lock()
 
     def _ensure_model(self) -> None:
@@ -106,8 +107,14 @@ class _LocalCrossEncoder:
             if self._model is None:
                 from sentence_transformers import CrossEncoder
 
-                self._model = CrossEncoder(self.model_name)
-                logger.info("Loaded cross-encoder model: %s", self.model_name)
+                from service.torch_device import resolve_device
+
+                self._device = resolve_device("RERANKER_DEVICE")
+                self._model = CrossEncoder(self.model_name, device=self._device)
+                logger.info(
+                    "Loaded cross-encoder model: %s (device=%s)",
+                    self.model_name, self._device,
+                )
 
     def score(self, query: str, text: str) -> float:
         """Return relevance score in [0, 1] for a (query, text) pair."""
