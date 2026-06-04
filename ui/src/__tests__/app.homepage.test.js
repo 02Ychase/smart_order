@@ -11,6 +11,13 @@ afterEach(() => {
   consoleWarnSpy.mockClear()
 })
 
+// The assistant panel is now login-gated; mount as a logged-in user so the
+// homepage still renders the assistant (welcome + composer).
+vi.mock('../composables/useAuth', async () => {
+  const { ref } = await import('vue')
+  return { useAuth: () => ({ currentUser: ref({ id: 1 }), logout: vi.fn() }) }
+})
+
 vi.mock('../composables/useHomepage', () => ({
   useHomepage: () => ({
     loading: ref(false),

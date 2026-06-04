@@ -1,6 +1,5 @@
 import { ref } from 'vue'
 import { streamChatWithAssistant } from '../api/assistant'
-import { useAuth } from './useAuth'
 
 export function useAssistant() {
   const sessionId = ref(null)
@@ -22,8 +21,6 @@ export function useAssistant() {
   const suggestedActions = ref([])
   const pendingAction = ref(null)
   const executedActions = ref([])
-
-  const { currentUser } = useAuth()
 
   const replaceMessageText = (index, text) => {
     messages.value[index] = { ...messages.value[index], text }
@@ -78,9 +75,6 @@ export function useAssistant() {
       const payload = {
         message: question,
         session_id: sessionId.value,
-      }
-      if (currentUser.value?.id) {
-        payload.user_id = currentUser.value.id
       }
       messages.value.push({ role: 'assistant', text: '' })
       assistantMessageIndex = messages.value.length - 1
