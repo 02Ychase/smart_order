@@ -94,7 +94,7 @@ describe('homepage shell', () => {
     expect(wrapper.text()).toContain('你好，欢迎来到 smart_order。')
     expect(wrapper.text()).toContain('我可以根据你的口味、人数和预算')
     expect(wrapper.text()).toContain('智能助手')
-    expect(wrapper.text()).toContain('➤')
+    expect(wrapper.find('.send-btn').exists()).toBe(true)
     expect(consoleWarnSpy).not.toHaveBeenCalled()
   })
 

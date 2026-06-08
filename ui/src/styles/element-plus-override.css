@@ -25,6 +25,12 @@
 
 .el-button {
   font-weight: 700;
+  transition: transform var(--so-dur) var(--so-ease), box-shadow var(--so-dur) var(--so-ease),
+    background-color var(--so-dur) var(--so-ease), border-color var(--so-dur) var(--so-ease), color var(--so-dur) var(--so-ease);
+}
+
+.el-button:not(.is-text):not(:disabled):active {
+  transform: scale(0.97);
 }
 
 .el-button--primary {
@@ -36,8 +42,20 @@
   --el-button-active-border-color: #d04425;
 }
 
+.el-button--primary:not(:disabled):hover {
+  box-shadow: var(--so-shadow-brand);
+}
+
 .el-dialog {
   --el-dialog-border-radius: var(--so-r-lg);
+  box-shadow: var(--so-shadow-float);
+  overflow: hidden;
+}
+
+/* Soften the modal backdrop so dialogs feel like they sit above a real page. */
+.el-overlay {
+  backdrop-filter: blur(3px);
+  background-color: rgba(20, 14, 4, 0.45);
 }
 
 .el-drawer {
@@ -46,4 +64,15 @@
 
 .el-input__wrapper {
   border-radius: var(--so-r-sm);
+  transition: box-shadow var(--so-dur) var(--so-ease);
+}
+
+.el-input__wrapper.is-focus {
+  box-shadow: 0 0 0 1px var(--so-orange) inset, 0 2px 10px rgba(254, 92, 52, 0.12) !important;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .el-overlay {
+    backdrop-filter: none;
+  }
 }

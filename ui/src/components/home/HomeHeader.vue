@@ -24,17 +24,20 @@
     </el-button>
 
     <form class="search-form" @submit.prevent="doSearch">
-      <el-input v-model="keyword" class="search-box" placeholder="搜索：黄焖鸡 / 奶茶 / 麻辣烫…">
-        <template #prefix>
-          <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="11" cy="11" r="7" />
-            <path d="m16 16 5 5" />
-          </svg>
-        </template>
-        <template #append>
-          <el-button class="search-submit" @click="doSearch">搜索</el-button>
-        </template>
-      </el-input>
+      <div class="search-box">
+        <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="11" cy="11" r="7" />
+          <path d="m16 16 5 5" />
+        </svg>
+        <input
+          v-model="keyword"
+          class="search-input"
+          type="text"
+          placeholder="搜索：黄焖鸡 / 奶茶 / 麻辣烫…"
+          aria-label="搜索商家或菜品"
+        />
+        <button class="search-submit" type="submit">搜索</button>
+      </div>
     </form>
 
     <nav class="header-nav" aria-label="顶部导航">
@@ -189,37 +192,28 @@ const doSearch = () => {
   min-width: 280px;
 }
 
+/* One seamless pill: icon + input + submit share a single rounded container,
+   so there is no input-group divider line cutting through the submit label. */
 .search-box {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   max-width: 460px;
-}
-
-.search-box :deep(.el-input__wrapper) {
-  height: 38px;
-  padding-left: 16px;
-  border-radius: var(--so-r-pill) 0 0 var(--so-r-pill);
+  height: 40px;
+  padding: 0 5px 0 16px;
+  border-radius: var(--so-r-pill);
   background: var(--so-surface);
   box-shadow: 0 0 0 1px var(--so-border-1) inset;
+  transition: box-shadow var(--so-dur) var(--so-ease);
 }
 
-.search-box :deep(.el-input__inner) {
-  color: var(--so-ink-1);
-  font-size: 13px;
-}
-
-.search-box :deep(.el-input__inner::placeholder) {
-  color: var(--so-ink-4);
-}
-
-.search-box :deep(.el-input-group__append) {
-  padding: 0 8px 0 0;
-  border-radius: 0 var(--so-r-pill) var(--so-r-pill) 0;
-  background: var(--so-surface);
-  box-shadow: 0 0 0 1px var(--so-border-1) inset;
+.search-box:focus-within {
+  box-shadow: 0 0 0 1px var(--so-orange) inset, 0 2px 12px rgba(254, 92, 52, 0.16);
 }
 
 .search-icon {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   flex-shrink: 0;
   fill: none;
   stroke: var(--so-ink-4);
@@ -228,22 +222,41 @@ const doSearch = () => {
   stroke-width: 2.2;
 }
 
+.search-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--so-ink-1);
+  font-size: 13px;
+}
+
+.search-input::placeholder {
+  color: var(--so-ink-4);
+}
+
 .search-submit {
-  height: 28px;
   flex-shrink: 0;
-  padding: 0 14px;
+  height: 30px;
+  padding: 0 18px;
   border: 0;
   border-radius: var(--so-r-pill);
   background: var(--so-ink-1);
   color: var(--so-yellow);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 800;
+  cursor: pointer;
+  transition: background var(--so-dur) var(--so-ease), transform var(--so-dur) var(--so-ease);
 }
 
-.search-submit:hover,
-.search-submit:focus {
-  background: var(--so-ink-1);
-  color: var(--so-yellow);
+.search-submit:hover {
+  background: #000;
+}
+
+.search-submit:active {
+  transform: scale(0.96);
 }
 
 .header-nav {
@@ -275,6 +288,24 @@ const doSearch = () => {
   align-items: center;
   justify-content: center;
   border-radius: var(--so-r-pill);
+  transition: transform var(--so-dur) var(--so-ease), box-shadow var(--so-dur) var(--so-ease), filter var(--so-dur) var(--so-ease);
+}
+
+.cart-pill:hover,
+.login-pill:hover,
+.avatar:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+}
+
+.cart-pill:active,
+.login-pill:active,
+.avatar:active {
+  transform: translateY(0) scale(0.96);
+}
+
+.cart-pill:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
 }
 
 .cart-pill {

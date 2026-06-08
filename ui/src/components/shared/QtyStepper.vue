@@ -46,6 +46,12 @@ const btnSize = computed(() => {
   font-family: var(--so-font-sans);
   line-height: 1;
   padding: 0;
+  transition: transform var(--so-dur) var(--so-ease-spring), background var(--so-dur) var(--so-ease), border-color var(--so-dur) var(--so-ease);
+}
+
+.minus:active,
+.plus:active {
+  transform: scale(0.85);
 }
 
 .minus {
@@ -54,9 +60,18 @@ const btnSize = computed(() => {
   color: var(--so-ink-2);
 }
 
+.minus:hover {
+  border-color: var(--so-orange);
+  color: var(--so-orange);
+}
+
 .plus {
   border: none;
   background: var(--so-orange);
   color: #fff;
+}
+
+.plus:hover {
+  background: var(--so-gold);
 }
 </style>

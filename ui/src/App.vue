@@ -308,6 +308,17 @@ onUnmounted(() => {
   padding: 20px 0 80px;
 }
 
+/* Staggered load-in so the page assembles itself instead of snapping in. */
+.homepage-container > * {
+  animation: mt-slide-up 0.5s var(--so-ease) both;
+}
+
+.homepage-container > *:nth-child(1) { animation-delay: 0.02s; }
+.homepage-container > *:nth-child(2) { animation-delay: 0.08s; }
+.homepage-container > *:nth-child(3) { animation-delay: 0.14s; }
+.homepage-container > *:nth-child(4) { animation-delay: 0.2s; }
+.homepage-container > *:nth-child(5) { animation-delay: 0.26s; }
+
 .promo-banner {
   position: relative;
   display: flex;
@@ -320,7 +331,16 @@ onUnmounted(() => {
   border-radius: var(--so-r-lg);
   color: #fff;
   box-shadow: var(--so-shadow-card);
-  transition: background 0.3s ease;
+  transition: background 0.4s var(--so-ease);
+}
+
+/* Soft diagonal gloss so the flat gradient reads as a lit surface. */
+.promo-banner::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(120% 80% at 85% 0%, rgba(255, 255, 255, 0.35), transparent 55%);
+  pointer-events: none;
 }
 
 .promo-banner--yellow {
@@ -380,6 +400,17 @@ onUnmounted(() => {
   color: var(--so-ink-1);
   font-size: 13px;
   font-weight: 800;
+  box-shadow: 0 4px 12px rgba(40, 28, 8, 0.18);
+  transition: transform var(--so-dur) var(--so-ease), box-shadow var(--so-dur) var(--so-ease);
+}
+
+.banner-cta:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(40, 28, 8, 0.24);
+}
+
+.banner-cta:active {
+  transform: translateY(0) scale(0.97);
 }
 
 .promo-banner--warm .banner-cta {
@@ -393,6 +424,12 @@ onUnmounted(() => {
   font-size: 96px;
   line-height: 1;
   filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.15));
+  animation: banner-float 4s ease-in-out infinite;
+}
+
+@keyframes banner-float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-8px) rotate(3deg); }
 }
 
 .banner-dots {
@@ -442,6 +479,11 @@ onUnmounted(() => {
   cursor: pointer;
   font-size: 12px;
   font-weight: 600;
+  transition: color var(--so-dur) var(--so-ease);
+}
+
+.home-category-cell:hover {
+  color: var(--so-orange);
 }
 
 .category-bubble {
@@ -452,7 +494,18 @@ onUnmounted(() => {
   height: 56px;
   border-radius: 50%;
   font-size: 28px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 2px 8px rgba(40, 28, 8, 0.05);
+  transition: transform var(--so-dur) var(--so-ease-spring),
+    box-shadow var(--so-dur) var(--so-ease);
+}
+
+.home-category-cell:hover .category-bubble {
+  transform: translateY(-3px) scale(1.05);
+  box-shadow: var(--so-shadow-card-hover);
+}
+
+.home-category-cell:active .category-bubble {
+  transform: translateY(-1px) scale(0.98);
 }
 
 .flash-strip {
@@ -500,10 +553,16 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   max-width: 128px;
-  padding: 0;
+  padding: 6px;
   border: 0;
+  border-radius: var(--so-r-md);
   background: transparent;
   cursor: pointer;
+  transition: background var(--so-dur) var(--so-ease);
+}
+
+.flash-dish:hover {
+  background: var(--so-orange-soft);
 }
 
 .flash-thumb {
@@ -515,6 +574,13 @@ onUnmounted(() => {
   height: 40px;
   border-radius: var(--so-r-sm);
   font-size: 22px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -2px 6px rgba(40, 28, 8, 0.06);
+  transition: transform var(--so-dur) var(--so-ease-spring);
+}
+
+.flash-dish:hover .flash-thumb {
+  transform: scale(1.08) rotate(-3deg);
 }
 
 .flash-info {

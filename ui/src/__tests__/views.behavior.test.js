@@ -139,7 +139,7 @@ describe('Task 11 guarded views', () => {
     })
 
     expect(listMerchantDishes).toHaveBeenCalledWith(42)
-    expect(wrapper.text()).toContain('加载中...')
+    expect(wrapper.find('.detail-skeleton').exists()).toBe(true)
 
     dishesRequest.resolve([
       { id: 7, name: '宫保鸡丁', description: '招牌微辣', price: 24 },
@@ -163,13 +163,13 @@ describe('Task 11 guarded views', () => {
     })
 
     expect(listMerchantDishes).toHaveBeenCalledWith(42)
-    expect(wrapper.text()).toContain('加载中...')
+    expect(wrapper.find('.detail-skeleton').exists()).toBe(true)
 
     dishesRequest.reject(new Error('商家加载失败'))
     await flushPromises()
 
     expect(wrapper.text()).toContain('商家加载失败')
-    expect(wrapper.text()).not.toContain('加载中...')
+    expect(wrapper.find('.detail-skeleton').exists()).toBe(false)
   })
 
   test('OrderDetailView renders an empty state when no orders are available', async () => {

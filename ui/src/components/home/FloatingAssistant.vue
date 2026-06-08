@@ -1,6 +1,7 @@
 <template>
   <!-- Launcher button -->
-  <button v-if="!panelOpen" class="launcher" @click="openAssistant">
+  <button v-if="!panelOpen" class="launcher" aria-label="打开智能助手" @click="openAssistant">
+    <span class="launcher-ring" aria-hidden="true"></span>
     <span class="launcher-icon">AI</span>
   </button>
 
@@ -15,7 +16,9 @@
           <p class="header-sub">● 在线 · 帮你挑、帮你点</p>
         </div>
       </div>
-      <button class="header-close" @click="panelOpen = false">×</button>
+      <button class="header-close" aria-label="关闭" @click="panelOpen = false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+      </button>
     </div>
 
     <!-- Messages -->
@@ -26,7 +29,10 @@
       </div>
 
       <div v-if="loading" class="thinking">
-        <span class="thinking-dot" /> AI 正在思考…
+        <span class="thinking-dots" aria-hidden="true">
+          <i></i><i></i><i></i>
+        </span>
+        AI 正在思考…
       </div>
 
       <!-- Constraint chips -->
@@ -109,7 +115,9 @@
           @keyup.enter="submit"
         />
       </div>
-      <button class="send-btn" :disabled="loading || !draft.trim()" @click="submit">➤</button>
+      <button class="send-btn" aria-label="发送" :disabled="loading || !draft.trim()" @click="submit">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6 3 10l12 2-12 2z" /></svg>
+      </button>
     </div>
   </aside>
 </template>
@@ -202,22 +210,38 @@ watch(messages, () => {
   right: 32px;
   bottom: 32px;
   z-index: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 60px;
   height: 60px;
   border-radius: 50%;
   border: none;
   background: linear-gradient(135deg, var(--so-yellow), var(--so-gold));
-  box-shadow: 0 4px 16px rgba(255, 209, 0, 0.4);
+  box-shadow: var(--so-shadow-brand);
   cursor: pointer;
-  transition: transform 0.2s;
+  transition: transform var(--so-dur) var(--so-ease-spring), box-shadow var(--so-dur) var(--so-ease);
 }
 
-.launcher:hover { transform: scale(1.08); }
+.launcher:hover { transform: scale(1.08); box-shadow: 0 8px 24px rgba(255, 143, 31, 0.5); }
+.launcher:active { transform: scale(0.96); }
+
+/* Expanding ring to draw the eye to the assistant on idle. */
+.launcher-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--so-gold);
+  animation: so-pulse-ring 2.4s var(--so-ease) infinite;
+  pointer-events: none;
+}
 
 .launcher-icon {
+  position: relative;
   font-size: 18px;
   font-weight: 800;
   color: var(--so-ink-1);
+  letter-spacing: 0.5px;
 }
 
 /* Panel */
@@ -263,8 +287,16 @@ watch(messages, () => {
 .header-close {
   background: rgba(0, 0, 0, 0.08); border: none; cursor: pointer;
   width: 28px; height: 28px; border-radius: 50%;
-  color: var(--so-ink-1); font-size: 16px;
+  color: var(--so-ink-1);
   display: inline-flex; align-items: center; justify-content: center;
+  transition: background var(--so-dur) var(--so-ease), transform var(--so-dur) var(--so-ease);
+}
+
+.header-close:hover { background: rgba(0, 0, 0, 0.16); transform: rotate(90deg); }
+
+.header-close svg {
+  width: 15px; height: 15px;
+  fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round;
 }
 
 /* Messages area */
@@ -309,11 +341,13 @@ watch(messages, () => {
 .bubble.assistant {
   background: var(--so-surface);
   border-radius: 4px 16px 16px 16px;
+  box-shadow: 0 1px 4px rgba(40, 28, 8, 0.06);
 }
 
 .bubble.user {
-  background: var(--so-yellow);
+  background: linear-gradient(135deg, var(--so-yellow), var(--so-yellow-deep));
   border-radius: 16px 4px 16px 16px;
+  box-shadow: 0 1px 4px rgba(255, 143, 31, 0.18);
 }
 
 /* Thinking */
@@ -321,17 +355,26 @@ watch(messages, () => {
   display: flex;
   gap: 8px;
   align-items: center;
+  margin-left: 36px;
   font-size: 12px;
   color: var(--so-ink-4);
 }
 
-.thinking-dot {
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  border: 2px solid var(--so-ink-4);
-  border-top-color: transparent;
-  animation: mt-spin 0.8s linear infinite;
+.thinking-dots {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
 }
+
+.thinking-dots i {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--so-gold);
+  animation: so-dot-bounce 1.2s ease-in-out infinite;
+}
+
+.thinking-dots i:nth-child(2) { animation-delay: 0.15s; }
+.thinking-dots i:nth-child(3) { animation-delay: 0.3s; }
 
 /* Section stacks */
 .section-stack {
@@ -387,6 +430,14 @@ watch(messages, () => {
   border-radius: var(--so-r-md);
   border: 1px solid var(--so-border-1);
   margin-bottom: 8px;
+  cursor: pointer;
+  transition: transform var(--so-dur) var(--so-ease), box-shadow var(--so-dur) var(--so-ease), border-color var(--so-dur) var(--so-ease);
+}
+
+.rec-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--so-orange-soft);
+  box-shadow: var(--so-shadow-card-hover);
 }
 
 .rec-thumb {
@@ -394,6 +445,7 @@ watch(messages, () => {
   flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   font-size: 28px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), inset 0 -2px 6px rgba(40, 28, 8, 0.06);
 }
 
 .rec-body { flex: 1; min-width: 0; }
@@ -451,11 +503,22 @@ watch(messages, () => {
   width: 38px; height: 38px; border-radius: 50%;
   background: var(--so-orange); color: #fff;
   border: none;
-  font-size: 16px; font-weight: 700;
   cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
-  transition: background 0.15s;
+  transition: background var(--so-dur) var(--so-ease), transform var(--so-dur) var(--so-ease-spring), box-shadow var(--so-dur) var(--so-ease);
 }
+
+.send-btn svg {
+  width: 18px; height: 18px;
+  fill: currentColor;
+}
+
+.send-btn:not(:disabled):hover {
+  transform: scale(1.08);
+  box-shadow: 0 4px 12px rgba(254, 92, 52, 0.4);
+}
+
+.send-btn:not(:disabled):active { transform: scale(0.94); }
 
 .send-btn:disabled {
   background: var(--so-ink-5);

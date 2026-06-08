@@ -48,7 +48,16 @@
       </div>
     </section>
 
-    <div v-if="loading" class="detail-state">加载中...</div>
+    <div v-if="loading" class="detail-skeleton" aria-busy="true" aria-label="菜品加载中">
+      <div v-for="n in 5" :key="`dsk-${n}`" class="dish-row dish-row--skeleton">
+        <div class="so-skeleton dish-thumb"></div>
+        <div class="dish-content skeleton-lines">
+          <span class="so-skeleton line line--title"></span>
+          <span class="so-skeleton line line--md"></span>
+          <span class="so-skeleton line line--sm"></span>
+        </div>
+      </div>
+    </div>
     <div v-else-if="errorMessage" class="detail-state detail-state--error">{{ errorMessage }}</div>
     <div v-else class="detail-main">
       <aside class="category-sidebar mt-scroll">
@@ -369,10 +378,19 @@ watch(() => props.merchantId, loadDishes, { immediate: true })
   background: var(--so-surface-line);
 }
 
+.masthead-cover {
+  box-shadow: var(--so-shadow-card);
+}
+
 .masthead-cover img {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  transition: transform 0.5s var(--so-ease);
+}
+
+.masthead-cover:hover img {
+  transform: scale(1.08);
 }
 
 .masthead-copy {
@@ -574,9 +592,44 @@ watch(() => props.merchantId, loadDishes, { immediate: true })
 .dish-row {
   display: flex;
   gap: 14px;
-  padding: 16px 0;
+  padding: 16px;
+  margin: 0 -16px;
+  border-radius: var(--so-r-md);
   border-bottom: 1px solid var(--so-border-1);
+  transition: background var(--so-dur) var(--so-ease);
 }
+
+.dish-row:not(.dish-row--skeleton):hover {
+  background: var(--so-yellow-faint);
+}
+
+.detail-skeleton {
+  flex: 1;
+  padding: 8px 24px 24px;
+  background: var(--so-surface);
+}
+
+.detail-skeleton .dish-row {
+  margin: 0;
+  padding: 16px 0;
+}
+
+.skeleton-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 6px;
+}
+
+.skeleton-lines .line {
+  display: block;
+  height: 13px;
+  border-radius: var(--so-r-xs);
+}
+
+.line--title { width: 46%; height: 17px; }
+.line--md { width: 78%; }
+.line--sm { width: 34%; }
 
 .dish-thumb {
   position: relative;
@@ -588,6 +641,12 @@ watch(() => props.merchantId, loadDishes, { immediate: true })
   justify-content: center;
   border-radius: var(--so-r-md);
   font-size: 40px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), inset 0 -3px 8px rgba(40, 28, 8, 0.06);
+  transition: transform var(--so-dur) var(--so-ease-spring);
+}
+
+.dish-row:not(.dish-row--skeleton):hover .dish-thumb {
+  transform: scale(1.05);
 }
 
 .dish-thumb em {
@@ -666,6 +725,16 @@ watch(() => props.merchantId, loadDishes, { immediate: true })
   height: 28px;
   font-size: 20px;
   font-weight: 800;
+  transition: transform var(--so-dur) var(--so-ease-spring), box-shadow var(--so-dur) var(--so-ease);
+}
+
+.add-button:hover {
+  transform: scale(1.12) rotate(90deg);
+  box-shadow: var(--so-shadow-brand);
+}
+
+.add-button:active {
+  transform: scale(0.92);
 }
 
 .cart-pane {
@@ -804,5 +873,24 @@ watch(() => props.merchantId, loadDishes, { immediate: true })
   width: 100%;
   border-radius: var(--so-r-pill);
   font-weight: 800;
+  transition: transform var(--so-dur) var(--so-ease), box-shadow var(--so-dur) var(--so-ease);
+}
+
+.checkout-button:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: var(--so-shadow-brand);
+}
+
+.checkout-button:not(:disabled):active {
+  transform: translateY(0) scale(0.99);
+}
+
+.category-sidebar button {
+  transition: background var(--so-dur) var(--so-ease), color var(--so-dur) var(--so-ease);
+}
+
+.category-sidebar button:hover {
+  background: var(--so-surface);
+  color: var(--so-ink-1);
 }
 </style>

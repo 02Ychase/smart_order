@@ -1,6 +1,16 @@
 <template>
   <section class="merchant-wall">
-    <div v-if="loading" class="merchant-state">加载中...</div>
+    <div v-if="loading" class="merchant-panel" aria-busy="true" aria-label="商家加载中">
+      <div v-for="n in 4" :key="`sk-${n}`" class="merchant-row merchant-row--skeleton" :class="{ 'merchant-row--first': n === 1 }">
+        <div class="so-skeleton merchant-cover"></div>
+        <div class="merchant-content skeleton-lines">
+          <span class="so-skeleton line line--title"></span>
+          <span class="so-skeleton line line--sm"></span>
+          <span class="so-skeleton line line--md"></span>
+          <span class="so-skeleton line line--lg"></span>
+        </div>
+      </div>
+    </div>
     <div v-else-if="errorMessage" class="merchant-state merchant-state--error">{{ errorMessage }}</div>
     <el-empty v-else-if="!merchants.length" description="暂无商家" />
     <div v-else class="merchant-panel">
@@ -168,16 +178,44 @@ const promoBadges = (merchant) => {
   border-radius: var(--so-r-md);
   background: var(--so-surface);
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background var(--so-dur) var(--so-ease),
+    box-shadow var(--so-dur) var(--so-ease),
+    transform var(--so-dur) var(--so-ease);
 }
 
 .merchant-row--first {
   border-top: 0;
 }
 
-.merchant-row:hover {
+.merchant-row:not(.merchant-row--skeleton):hover {
   background: var(--so-yellow-faint);
+  box-shadow: var(--so-shadow-card-hover);
+  transform: translateY(-2px);
 }
+
+.merchant-row:not(.merchant-row--skeleton):active {
+  transform: translateY(0) scale(0.995);
+}
+
+.merchant-row--skeleton {
+  cursor: default;
+}
+
+.skeleton-lines {
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.skeleton-lines .line {
+  display: block;
+  height: 12px;
+  border-radius: var(--so-r-xs);
+}
+
+.line--title { width: 52%; height: 16px; }
+.line--sm { width: 38%; }
+.line--md { width: 70%; }
+.line--lg { width: 84%; }
 
 .merchant-cover {
   position: relative;
@@ -194,6 +232,11 @@ const promoBadges = (merchant) => {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  transition: transform 0.4s var(--so-ease);
+}
+
+.merchant-row:hover .merchant-cover img {
+  transform: scale(1.06);
 }
 
 .cover-shade {
