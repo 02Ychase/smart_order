@@ -48,7 +48,7 @@
 
       <section class="flash-strip">
         <span class="flash-label">⚡ 限时秒杀</span>
-        <span class="flash-countdown">距结束 <strong>02 : 14 : 36</strong></span>
+        <span class="flash-countdown">距结束 <strong>{{ flashCountdown }}</strong></span>
         <div class="flash-spacer"></div>
         <button v-for="dish in flashDishes" :key="dish.id" class="flash-dish" type="button" @click="requireLogin(() => cartOpen = true)">
           <span class="flash-thumb" :style="{ background: dish.bg }">{{ dish.glyph }}</span>
@@ -146,6 +146,25 @@ const { refreshCart } = useCart()
 const activeBannerIndex = ref(0)
 const defaultAddress = ref(null)
 let bannerTimer
+
+// Flash-sale countdown. Counts down to the end of a rolling 3-hour window and
+// then auto-resets, so the timer keeps ticking and is consistent across reloads.
+const FLASH_WINDOW_MS = 3 * 60 * 60 * 1000
+const flashRemainingMs = ref(0)
+let flashTimer
+
+const updateFlashRemaining = () => {
+  flashRemainingMs.value = FLASH_WINDOW_MS - (Date.now() % FLASH_WINDOW_MS)
+}
+
+const flashCountdown = computed(() => {
+  const totalSeconds = Math.floor(flashRemainingMs.value / 1000)
+  const pad = (n) => String(n).padStart(2, '0')
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  return `${pad(hours)} : ${pad(minutes)} : ${pad(seconds)}`
+})
 
 const loadDefaultAddress = async () => {
   if (!currentUser.value) {
@@ -286,10 +305,13 @@ onMounted(() => {
   bannerTimer = window.setInterval(() => {
     activeBannerIndex.value = (activeBannerIndex.value + 1) % promoBanners.length
   }, 5000)
+  updateFlashRemaining()
+  flashTimer = window.setInterval(updateFlashRemaining, 1000)
 })
 
 onUnmounted(() => {
   window.clearInterval(bannerTimer)
+  window.clearInterval(flashTimer)
 })
 </script>
 

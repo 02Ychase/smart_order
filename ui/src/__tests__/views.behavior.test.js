@@ -2,9 +2,10 @@ import { defineComponent, nextTick } from 'vue'
 import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 
-const { listMerchants, listMerchantDishes, listOrders, getOrderDetail } = vi.hoisted(() => ({
+const { listMerchants, listMerchantDishes, getMerchant, listOrders, getOrderDetail } = vi.hoisted(() => ({
   listMerchants: vi.fn(),
   listMerchantDishes: vi.fn(),
+  getMerchant: vi.fn(),
   listOrders: vi.fn(),
   getOrderDetail: vi.fn(),
 }))
@@ -23,6 +24,7 @@ const { getCart, addCartItem, removeCartItem } = vi.hoisted(() => ({
 vi.mock('../api/catalog', () => ({
   listMerchants,
   listMerchantDishes,
+  getMerchant,
 }))
 
 vi.mock('../api/orders', () => ({

@@ -146,7 +146,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { listMerchantDishes } from '../api/catalog'
+import { getMerchant, listMerchantDishes } from '../api/catalog'
 import { checkFavorite, toggleFavorite } from '../api/favorites'
 import { useAuth } from '../composables/useAuth'
 import { useCart } from '../composables/useCart'
@@ -196,7 +196,7 @@ const isOpen = computed(() => businessStatus.value === '营业中')
 const deliveryFee = computed(() => Number(displayMerchant.value?.delivery_fee || 0))
 const minOrderAmount = computed(() => Number(displayMerchant.value?.min_order_amount || displayMerchant.value?.min_order || 20))
 const salesText = computed(() => displayMerchant.value?.sales || displayMerchant.value?.monthly_sales || '300+')
-const deliveryMinutes = computed(() => displayMerchant.value?.delivery_minutes || displayMerchant.value?.delivery_time_minutes || 28)
+const deliveryMinutes = computed(() => displayMerchant.value?.delivery_minutes || displayMerchant.value?.delivery_time_minutes || displayMerchant.value?.avg_delivery_minutes || 28)
 const distanceText = computed(() => Number(displayMerchant.value?.distance_km || displayMerchant.value?.distance || 1.2).toFixed(1))
 
 const dishCategories = computed(() => {
@@ -314,11 +314,22 @@ const loadDishes = async (merchantId) => {
   loading.value = true
   errorMessage.value = ''
   activeCategory.value = '热销榜'
+  merchantInfo.value = null
+
+  // Fetch the merchant profile so the real name/rating/etc. show regardless of
+  // how the user arrived (home list, search, or favorites). Runs in parallel
+  // with the dish load; guarded so a missing endpoint never breaks the page.
+  Promise.resolve(getMerchant?.(merchantId))
+    .then((merchant) => {
+      // Ignore a stale response if the user already switched merchants.
+      if (merchant && String(merchant.id) === String(merchantId)) merchantInfo.value = merchant
+    })
+    .catch(() => {})
 
   try {
     const merchantDishes = await listMerchantDishes(merchantId)
     dishes.value = merchantDishes || []
-    merchantInfo.value = merchantDishes?.[0]?.merchant || null
+    if (!merchantInfo.value) merchantInfo.value = merchantDishes?.[0]?.merchant || null
     syncMerchantState(merchantId)
   } catch (error) {
     errorMessage.value = error?.message || '加载失败，请稍后再试'
